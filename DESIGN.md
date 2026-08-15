@@ -135,6 +135,14 @@ vectorizes alphabet classification and grouping, and uses a width-aware
 256-bit Horner conversion; that decoder schedule is faster on the recorded
 Threadripper than the prototype's inverse radix-`58^5` matrix.
 
+The encoder's throughput path uses data-dependent branches to skip rare
+reciprocal and carry-propagation corrections. For the common `input[0] != 0`
+case, it also assembles digits entirely in registers and writes the fixed
+43- or 44-character result without a stack round trip. A general fallback
+preserves every leading-zero prefix. These branches improve ordinary public
+identifier workloads but mean the AVX2 encoder is not constant-time for secret
+inputs.
+
 ## 4. Instruction-set and implementation scope
 
 The fastest encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. Its decoder

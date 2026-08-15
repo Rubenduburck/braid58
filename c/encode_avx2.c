@@ -4,6 +4,9 @@
  * Ten radix-2^26 chunks are converted into nine radix-58^5 cells. Since
  * 58^5 fits below 2^30, every matrix term is an exact AVX2 vpmuludq instead
  * of an emulated packed 64-bit product.
+ *
+ * Rare correction and full-width output paths use data-dependent branches;
+ * this throughput-oriented encoder is not constant-time for secret inputs.
  */
 
 #include "braid58_internal.h"
@@ -106,6 +109,11 @@ static inline uint64_t braid58_load_be64(const void *source) {
 #endif
 }
 
+/* Force reciprocal division when quotient and remainder are both live. */
+static inline uint32_t braid58_div58_u32(uint32_t value) {
+  return (uint32_t)(((uint64_t)value * UINT64_C(0x8d3dcb09)) >> 37);
+}
+
 /* Exact floor(x / 58^5) and remainder for every raw encoder column. */
 BRAID58_TARGET_AVX2 static inline void
 braid58_div_b5_4(__m256i value, __m256i *quotient, __m256i *remainder) {
@@ -118,8 +126,10 @@ braid58_div_b5_4(__m256i value, __m256i *quotient, __m256i *remainder) {
       _mm256_add_epi64(product1, _mm256_srli_epi64(product0, 32)), 29);
   __m256i product = _mm256_mul_epu32(q, divisor);
   const __m256i high = _mm256_cmpgt_epi64(product, value);
-  q = _mm256_add_epi64(q, high);
-  product = _mm256_sub_epi64(product, _mm256_and_si256(high, divisor));
+  if (__builtin_expect(!_mm256_testz_si256(high, high), 0)) {
+    q = _mm256_add_epi64(q, high);
+    product = _mm256_sub_epi64(product, _mm256_and_si256(high, divisor));
+  }
   *quotient = q;
   *remainder = _mm256_sub_epi64(value, product);
 }
@@ -218,21 +228,29 @@ braid58_encode_cells(const uint8_t input[32], uint32_t *top_cell) {
   __m256i sum_hi = _mm256_add_epi64(rhi, qprev_hi);
 
   const __m256i propagate = _mm256_set1_epi64x((long long)(BRAID58_B5 - 1));
-  unsigned generate = (unsigned)_mm256_movemask_pd(
-      _mm256_castsi256_pd(_mm256_cmpgt_epi64(sum_lo, propagate)));
-  generate |= (unsigned)_mm256_movemask_pd(
-                  _mm256_castsi256_pd(_mm256_cmpgt_epi64(sum_hi, propagate)))
-              << 4;
-  unsigned propagate_mask = (unsigned)_mm256_movemask_pd(
-      _mm256_castsi256_pd(_mm256_cmpeq_epi64(sum_lo, propagate)));
-  propagate_mask |= (unsigned)_mm256_movemask_pd(_mm256_castsi256_pd(
-                        _mm256_cmpeq_epi64(sum_hi, propagate)))
-                    << 4;
-  generate |= propagate_mask & (generate << 1);
-  propagate_mask &= propagate_mask << 1;
-  generate |= propagate_mask & (generate << 2);
-  propagate_mask &= propagate_mask << 2;
-  generate |= propagate_mask & (generate << 4);
+  const __m256i initial_generate_lo = _mm256_cmpgt_epi64(sum_lo, propagate);
+  const __m256i initial_generate_hi = _mm256_cmpgt_epi64(sum_hi, propagate);
+  unsigned generate =
+      (unsigned)_mm256_movemask_pd(_mm256_castsi256_pd(initial_generate_lo));
+  generate |=
+      (unsigned)_mm256_movemask_pd(_mm256_castsi256_pd(initial_generate_hi))
+      << 4;
+  const __m256i propagate_lo = _mm256_cmpeq_epi64(sum_lo, propagate);
+  const __m256i propagate_hi = _mm256_cmpeq_epi64(sum_hi, propagate);
+  const __m256i any_propagate = _mm256_or_si256(propagate_lo, propagate_hi);
+  const unsigned had_propagate =
+      (unsigned)!_mm256_testz_si256(any_propagate, any_propagate);
+  if (__builtin_expect(had_propagate != 0U, 0)) {
+    unsigned propagate_mask =
+        (unsigned)_mm256_movemask_pd(_mm256_castsi256_pd(propagate_lo));
+    propagate_mask |=
+        (unsigned)_mm256_movemask_pd(_mm256_castsi256_pd(propagate_hi)) << 4;
+    generate |= propagate_mask & (generate << 1);
+    propagate_mask &= propagate_mask << 1;
+    generate |= propagate_mask & (generate << 2);
+    propagate_mask &= propagate_mask << 2;
+    generate |= propagate_mask & (generate << 4);
+  }
   generate &= 0xffU;
 
   const unsigned carry_in = (generate << 1) & 0xffU;
@@ -243,8 +261,12 @@ braid58_encode_cells(const uint8_t input[32], uint32_t *top_cell) {
   sum_lo = _mm256_add_epi64(sum_lo, carry_lo);
   sum_hi = _mm256_add_epi64(sum_hi, carry_hi);
   const __m256i divisor = _mm256_set1_epi64x((long long)BRAID58_B5);
-  const __m256i generate_lo = _mm256_cmpgt_epi64(sum_lo, propagate);
-  const __m256i generate_hi = _mm256_cmpgt_epi64(sum_hi, propagate);
+  __m256i generate_lo = initial_generate_lo;
+  __m256i generate_hi = initial_generate_hi;
+  if (__builtin_expect(had_propagate != 0U, 0)) {
+    generate_lo = _mm256_cmpgt_epi64(sum_lo, propagate);
+    generate_hi = _mm256_cmpgt_epi64(sum_hi, propagate);
+  }
   sum_lo = _mm256_sub_epi64(sum_lo, _mm256_and_si256(generate_lo, divisor));
   sum_hi = _mm256_sub_epi64(sum_hi, _mm256_and_si256(generate_hi, divisor));
 
@@ -259,7 +281,6 @@ braid58_encode_cells(const uint8_t input[32], uint32_t *top_cell) {
 BRAID58_TARGET_AVX2 size_t
 braid58_encode_32_avx2(const uint8_t input[static 32],
                        char output[static BRAID58_ENCODED_32_CAPACITY]) {
-  uint8_t digits[64] __attribute__((aligned(32)));
   uint8_t ascii[64] __attribute__((aligned(32)));
   uint32_t top_cell;
   const __m256i zero = _mm256_setzero_si256();
@@ -309,35 +330,61 @@ braid58_encode_32_avx2(const uint8_t input[static 32],
   const __m256i tail = _mm256_shuffle_epi8(
       fields, _mm256_load_si256((const __m256i *)(const void *)BRAID58_TAIL_A));
 
-  _mm256_store_si256((__m256i *)(void *)digits, zero);
-  _mm256_store_si256((__m256i *)(void *)(digits + 32), zero);
   const __m128i head_lo = _mm256_castsi256_si128(head);
   const __m128i head_hi = _mm256_extracti128_si256(head, 1);
   const __m128i tail_lo = _mm256_castsi256_si128(tail);
   const __m128i tail_hi = _mm256_extracti128_si256(tail, 1);
-  _mm_storeu_si128((__m128i *)(void *)(digits + 5), head_hi);
-  const uint32_t tail_hi_word = (uint32_t)_mm_cvtsi128_si32(tail_hi);
-  memcpy(digits + 21, &tail_hi_word, sizeof(tail_hi_word));
-  _mm_storeu_si128((__m128i *)(void *)(digits + 25), head_lo);
-  const uint32_t tail_lo_word = (uint32_t)_mm_cvtsi128_si32(tail_lo);
-  memcpy(digits + 41, &tail_lo_word, sizeof(tail_lo_word));
 
   const uint32_t top2 = top_cell / BRAID58_B2;
   const uint32_t top_remainder = top_cell - top2 * BRAID58_B2;
-  const uint32_t top0 = top2 / 58U;
+  const uint32_t top0 = braid58_div58_u32(top2);
   const uint32_t top1 = top2 - top0 * 58U;
-  const uint32_t top3 = top_remainder / 58U;
+  const uint32_t top3 = braid58_div58_u32(top_remainder);
   const uint32_t top4 = top_remainder - top3 * 58U;
-  digits[0] = 0;
-  digits[1] = (uint8_t)top0;
-  digits[2] = (uint8_t)top1;
-  digits[3] = (uint8_t)top3;
-  digits[4] = (uint8_t)top4;
-
+  const uint64_t top_digits = ((uint64_t)top0 << 8) | ((uint64_t)top1 << 16) |
+                              ((uint64_t)top3 << 24) | ((uint64_t)top4 << 32);
+  const __m128i digit0_lo = _mm_or_si128(
+      _mm_cvtsi64_si128((long long)top_digits), _mm_slli_si128(head_hi, 5));
+  const __m128i digit0_hi = _mm_or_si128(
+      _mm_srli_si128(head_hi, 11),
+      _mm_or_si128(_mm_slli_si128(tail_hi, 5), _mm_slli_si128(head_lo, 9)));
+  const __m128i digit1_lo =
+      _mm_or_si128(_mm_srli_si128(head_lo, 7), _mm_slli_si128(tail_lo, 9));
   const __m256i digit0 =
-      _mm256_load_si256((const __m256i *)(const void *)digits);
-  const __m256i digit1 =
-      _mm256_load_si256((const __m256i *)(const void *)(digits + 32));
+      _mm256_inserti128_si256(_mm256_castsi128_si256(digit0_lo), digit0_hi, 1);
+  const __m256i digit1 = _mm256_inserti128_si256(
+      _mm256_castsi128_si256(digit1_lo), _mm_setzero_si128(), 1);
+  const __m256i ascii0 = braid58_map58(digit0);
+  const __m256i ascii1 = braid58_map58(digit1);
+
+  /* input[0] != 0 proves there are no leading zero bytes and at least 43
+   * digits. Immediate alignments avoid both scans and the stack round trip. */
+  if (__builtin_expect(input[0] != 0, 1)) {
+    const __m128i ascii0_lo = _mm256_castsi256_si128(ascii0);
+    const __m128i ascii0_hi = _mm256_extracti128_si256(ascii0, 1);
+    const __m128i ascii1_lo = _mm256_castsi256_si128(ascii1);
+    __m128i output_lo;
+    __m128i output_hi;
+    unsigned skip;
+    if (__builtin_expect(top0 != 0U, 1)) {
+      output_lo = _mm_alignr_epi8(ascii0_hi, ascii0_lo, 1);
+      output_hi = _mm_alignr_epi8(ascii1_lo, ascii0_hi, 1);
+      skip = 1U;
+    } else {
+      output_lo = _mm_alignr_epi8(ascii0_hi, ascii0_lo, 2);
+      output_hi = _mm_alignr_epi8(ascii1_lo, ascii0_hi, 2);
+      skip = 2U;
+    }
+    const __m256i output_vector = _mm256_inserti128_si256(
+        _mm256_castsi128_si256(output_lo), output_hi, 1);
+    const __m128i output_tail = _mm_alignr_epi8(ascii1_lo, ascii0_hi, 13);
+    const size_t length = 45U - skip;
+    _mm256_storeu_si256((__m256i *)(void *)output, output_vector);
+    _mm_storeu_si128((__m128i *)(void *)(output + length - 16U), output_tail);
+    output[length] = '\0';
+    return length;
+  }
+
   uint64_t nonzero_digits = (uint32_t)~(uint32_t)_mm256_movemask_epi8(
       _mm256_cmpeq_epi8(digit0, zero));
   nonzero_digits |= (uint64_t)(uint32_t)~(uint32_t)_mm256_movemask_epi8(
@@ -347,8 +394,8 @@ braid58_encode_32_avx2(const uint8_t input[static 32],
   const unsigned first_digit =
       nonzero_digits ? (unsigned)__builtin_ctzll(nonzero_digits) : 45U;
 
-  _mm256_store_si256((__m256i *)(void *)ascii, braid58_map58(digit0));
-  _mm256_store_si256((__m256i *)(void *)(ascii + 32), braid58_map58(digit1));
+  _mm256_store_si256((__m256i *)(void *)ascii, ascii0);
+  _mm256_store_si256((__m256i *)(void *)(ascii + 32), ascii1);
 
   const __m256i input_vector =
       _mm256_loadu_si256((const __m256i *)(const void *)input);

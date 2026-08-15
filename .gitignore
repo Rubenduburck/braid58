@@ -3,6 +3,7 @@
 /Cargo.lock
 /Braid58-AVX512-prototype.zip
 /Braid58-AVX2-prototype.zip
+/Braid58-AVX2-squeezed.zip
 *.a
 *.o
 *_test

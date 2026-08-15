@@ -60,26 +60,29 @@ sample count to 31 trials of 1,000,000 calls.
 
 | Operation | Min ticks | Median ticks | Max ticks | Mcalls/s | GiB/s |
 |---|---:|---:|---:|---:|---:|
-| Braid58 AVX2 encode 32 | 53.92 | 55.53 | 59.00 | 45.02 | 1.342 |
-| Base58 Turbo encode 32 | 52.64 | 54.09 | 57.45 | 46.21 | 1.377 |
-| five8 encode 32 | 78.77 | 79.72 | 85.12 | 31.36 | 0.935 |
-| Firedancer encode 32 | 68.43 | 70.36 | 74.71 | 35.53 | 1.059 |
-| Braid58 AVX2 decode 32 | 69.45 | 70.93 | 81.77 | 35.25 | 1.444 |
-| Base58 Turbo decode 32 | 43.92 | 45.22 | 74.27 | 55.29 | 2.266 |
-| five8 decode 32 | 61.72 | 63.51 | 93.21 | 39.36 | 1.613 |
-| Firedancer decode 32 | 101.26 | 103.05 | 109.66 | 24.26 | 0.994 |
+| Braid58 AVX2 encode 32 | 51.74 | 52.95 | 56.47 | 47.21 | 1.407 |
+| Base58 Turbo encode 32 | 53.28 | 54.30 | 58.14 | 46.04 | 1.372 |
+| five8 encode 32 | 78.08 | 79.39 | 85.09 | 31.49 | 0.938 |
+| Firedancer encode 32 | 68.50 | 69.78 | 74.82 | 35.83 | 1.068 |
+| Braid58 AVX2 decode 32 | 69.52 | 70.73 | 75.78 | 35.34 | 1.448 |
+| Base58 Turbo decode 32 | 43.87 | 45.14 | 47.98 | 55.38 | 2.269 |
+| five8 decode 32 | 61.63 | 63.23 | 74.57 | 39.54 | 1.620 |
+| Firedancer decode 32 | 101.10 | 103.90 | 110.68 | 24.06 | 0.986 |
 
-The radix-`58^5` AVX2 encoder used 30.3% fewer median ticks than five8 and
-21.1% fewer than Firedancer, corresponding to 1.44x and 1.27x their call
-throughput. Turbo used 2.6% fewer ticks than Braid58 in the 31-trial record.
-Two preceding 15-trial runs put Braid58 and Turbo on opposite sides by 3.9%
-and 3.3%, so this host supports a near-parity conclusion rather than a robust
-ordering between those two. The AVX2 decoder remains slower than Turbo and
-five8, but used 31.2% fewer ticks than Firedancer and delivered 1.45x its call
-throughput. Native AVX-512 is still materially faster: the recorded AVX-512
-encoder used 37.3% fewer median ticks than the AVX2 encoder. The algorithmic
-advantage therefore carries to AVX2 against five8 and Firedancer without
-erasing the additional AVX-512 benefit.
+The squeezed radix-`58^5` AVX2 encoder used 2.5% fewer median ticks than
+Turbo, 33.3% fewer than five8, and 24.1% fewer than Firedancer, corresponding
+to 1.03x, 1.50x, and 1.32x their call throughput. An independent 31-trial
+replication measured Braid58 at 54.82 ticks and Turbo at 55.00, a 0.3% Braid58
+lead. The local Braid58 edge is therefore repeatable but small enough that a
+universal ordering would be unwarranted. Before the squeeze, Braid58 measured
+55.53 ticks in this harness; a direct strict-Haswell A/B measured about a 5%
+reduction from the new common path.
+
+The AVX2 decoder remains slower than Turbo and five8, but used 31.9% fewer
+ticks than Firedancer and delivered 1.47x its call throughput. Native AVX-512
+is still materially faster: the recorded AVX-512 encoder used 34.3% fewer
+median ticks than the squeezed AVX2 encoder. The algorithmic advantage
+therefore carries to AVX2 without erasing the additional AVX-512 benefit.
 
 These local absolute numbers are much lower than the EPYC record in
 `DESIGN.md`, but that does not contradict it: invariant-TSC rate, boost state,
