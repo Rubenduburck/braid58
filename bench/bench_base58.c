@@ -13,7 +13,7 @@
 
 enum {
   CORPUS_COUNT = 1024,
-  OP_COUNT = 10,
+  OP_COUNT = 14,
   MAX_TRIALS = 99
 };
 
@@ -27,6 +27,10 @@ size_t turbo_base58_encode_32(const unsigned char *, unsigned char *);
 size_t turbo_base58_encode_64(const unsigned char *, unsigned char *);
 size_t turbo_base58_decode_32(const unsigned char *, size_t, unsigned char *);
 size_t turbo_base58_decode_64(const unsigned char *, size_t, unsigned char *);
+size_t five8_base58_encode_32(const unsigned char *, unsigned char *);
+size_t five8_base58_encode_64(const unsigned char *, unsigned char *);
+size_t five8_base58_decode_32(const unsigned char *, size_t, unsigned char *);
+size_t five8_base58_decode_64(const unsigned char *, size_t, unsigned char *);
 
 static uint8_t inputs32[CORPUS_COUNT][32] __attribute__((aligned(64)));
 static uint8_t inputs64[CORPUS_COUNT][64] __attribute__((aligned(64)));
@@ -115,6 +119,8 @@ prepare_and_validate(void) {
     char braid_output[45];
     unsigned char turbo_output32[44];
     unsigned char turbo_output64[88];
+    unsigned char five8_output32[44];
+    unsigned char five8_output64[88];
     unsigned long braid_length = 0;
 
     firedancer_base58_encode_32(inputs32[case_index],
@@ -128,6 +134,10 @@ prepare_and_validate(void) {
         turbo_base58_encode_32(inputs32[case_index], turbo_output32);
     const size_t turbo_length64 =
         turbo_base58_encode_64(inputs64[case_index], turbo_output64);
+    const size_t five8_length32 =
+        five8_base58_encode_32(inputs32[case_index], five8_output32);
+    const size_t five8_length64 =
+        five8_base58_encode_64(inputs64[case_index], five8_output64);
 
     if (firedancer_length32 != 44UL)
       fail("32-byte input did not encode to 44 characters", case_index);
@@ -143,12 +153,20 @@ prepare_and_validate(void) {
     if (turbo_length64 != firedancer_length64 ||
         memcmp(turbo_output64, encoded64[case_index], turbo_length64) != 0)
       fail("Base58 Turbo and Firedancer 64-byte encoders disagree", case_index);
+    if (five8_length32 != firedancer_length32 ||
+        memcmp(five8_output32, encoded32[case_index], five8_length32) != 0)
+      fail("five8 and Firedancer 32-byte encoders disagree", case_index);
+    if (five8_length64 != firedancer_length64 ||
+        memcmp(five8_output64, encoded64[case_index], five8_length64) != 0)
+      fail("five8 and Firedancer 64-byte encoders disagree", case_index);
 
     uint8_t braid_decoded[32];
     uint8_t firedancer_decoded32[32];
     uint8_t firedancer_decoded64[64];
     uint8_t turbo_decoded32[44];
     uint8_t turbo_decoded64[88];
+    uint8_t five8_decoded32[32];
+    uint8_t five8_decoded64[64];
     if (!braid58_decode_32(encoded32[case_index], firedancer_length32,
                            braid_decoded) ||
         memcmp(braid_decoded, inputs32[case_index], 32) != 0)
@@ -169,6 +187,14 @@ prepare_and_validate(void) {
                                firedancer_length64, turbo_decoded64) != 64 ||
         memcmp(turbo_decoded64, inputs64[case_index], 64) != 0)
       fail("Base58 Turbo 64-byte decoder round trip", case_index);
+    if (five8_base58_decode_32((const unsigned char *)encoded32[case_index],
+                               firedancer_length32, five8_decoded32) != 32 ||
+        memcmp(five8_decoded32, inputs32[case_index], 32) != 0)
+      fail("five8 32-byte decoder round trip", case_index);
+    if (five8_base58_decode_64((const unsigned char *)encoded64[case_index],
+                               firedancer_length64, five8_decoded64) != 64 ||
+        memcmp(five8_decoded64, inputs64[case_index], 64) != 0)
+      fail("five8 64-byte decoder round trip", case_index);
   }
 }
 
@@ -205,6 +231,19 @@ bench_turbo_encode_32(uint64_t iterations) {
   const uint64_t start = tick_start();
   for (uint64_t iteration = 0; iteration < iterations; ++iteration)
     length = turbo_base58_encode_32(
+        inputs32[iteration & (CORPUS_COUNT - 1)], output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
+bench_five8_encode_32(uint64_t iterations) {
+  unsigned char output[64] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = five8_base58_encode_32(
         inputs32[iteration & (CORPUS_COUNT - 1)], output);
   const uint64_t end = tick_end();
   result_sink += (uint64_t)output[0] + length;
@@ -252,6 +291,20 @@ bench_turbo_decode_32(uint64_t iterations) {
 }
 
 static uint64_t
+bench_five8_decode_32(uint64_t iterations) {
+  uint8_t output[32] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = five8_base58_decode_32(
+        (const unsigned char *)encoded32[iteration & (CORPUS_COUNT - 1)],
+        44, output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
 bench_firedancer_encode_64(uint64_t iterations) {
   char output[128] __attribute__((aligned(64)));
   unsigned long length = 0;
@@ -278,6 +331,19 @@ bench_turbo_encode_64(uint64_t iterations) {
 }
 
 static uint64_t
+bench_five8_encode_64(uint64_t iterations) {
+  unsigned char output[96] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = five8_base58_encode_64(
+        inputs64[iteration & (CORPUS_COUNT - 1)], output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
 bench_firedancer_decode_64(uint64_t iterations) {
   uint8_t output[64] __attribute__((aligned(64)));
   unsigned char *result = NULL;
@@ -297,6 +363,20 @@ bench_turbo_decode_64(uint64_t iterations) {
   const uint64_t start = tick_start();
   for (uint64_t iteration = 0; iteration < iterations; ++iteration)
     length = turbo_base58_decode_64(
+        (const unsigned char *)encoded64[iteration & (CORPUS_COUNT - 1)],
+        88, output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
+bench_five8_decode_64(uint64_t iterations) {
+  uint8_t output[64] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = five8_base58_decode_64(
         (const unsigned char *)encoded64[iteration & (CORPUS_COUNT - 1)],
         88, output);
   const uint64_t end = tick_end();
@@ -339,18 +419,21 @@ main(int argc, char **argv) {
   const double tsc_hz = calibrate_tsc_hz();
 
   const char *const names[OP_COUNT] = {
-      "Braid58 encode 32", "Turbo encode 32", "Firedancer encode 32",
-      "Braid58 decode 32", "Turbo decode 32", "Firedancer decode 32",
-      "Turbo encode 64", "Firedancer encode 64",
-      "Turbo decode 64", "Firedancer decode 64"};
+      "Braid58 encode 32", "Turbo encode 32", "five8 encode 32",
+      "Firedancer encode 32", "Braid58 decode 32", "Turbo decode 32",
+      "five8 decode 32", "Firedancer decode 32", "Turbo encode 64",
+      "five8 encode 64", "Firedancer encode 64", "Turbo decode 64",
+      "five8 decode 64", "Firedancer decode 64"};
   uint64_t (*const benchmarks[OP_COUNT])(uint64_t) = {
       bench_braid_encode_32, bench_turbo_encode_32,
-      bench_firedancer_encode_32, bench_braid_decode_32,
-      bench_turbo_decode_32, bench_firedancer_decode_32,
-      bench_turbo_encode_64, bench_firedancer_encode_64,
-      bench_turbo_decode_64, bench_firedancer_decode_64};
+      bench_five8_encode_32, bench_firedancer_encode_32,
+      bench_braid_decode_32, bench_turbo_decode_32,
+      bench_five8_decode_32, bench_firedancer_decode_32,
+      bench_turbo_encode_64, bench_five8_encode_64,
+      bench_firedancer_encode_64, bench_turbo_decode_64,
+      bench_five8_decode_64, bench_firedancer_decode_64};
   const size_t bytes_per_call[OP_COUNT] = {
-      32, 32, 32, 44, 44, 44, 64, 64, 88, 88};
+      32, 32, 32, 32, 44, 44, 44, 44, 64, 64, 64, 88, 88, 88};
   double samples[OP_COUNT][MAX_TRIALS];
 
   for (size_t operation = 0; operation < OP_COUNT; ++operation)

@@ -4,6 +4,7 @@ set -euo pipefail
 readonly FIREDANCER_COMMIT=e14b9929232019aa61f9258406a4c926e5fee75a
 readonly FIREDANCER_URL=https://github.com/firedancer-io/firedancer.git
 readonly BASE58_TURBO_VERSION=0.3.0
+readonly FIVE8_VERSION=1.0.0
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir=${BUILD_DIR:-"${repo_dir}/build/bench"}
@@ -77,6 +78,7 @@ echo "Compiler: $("${compiler}" --version | head -n 1)"
 echo "Rust: $(rustc --version)"
 echo "Firedancer: ${actual_commit}"
 echo "Base58 Turbo: ${BASE58_TURBO_VERSION} (crates.io)"
+echo "five8: ${FIVE8_VERSION} (crates.io)"
 echo
 
 exec taskset -c "${cpu}" "${build_dir}/bench_base58" \
