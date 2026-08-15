@@ -3,11 +3,14 @@ set -euo pipefail
 
 readonly FIREDANCER_COMMIT=e14b9929232019aa61f9258406a4c926e5fee75a
 readonly FIREDANCER_URL=https://github.com/firedancer-io/firedancer.git
+readonly BASE58_TURBO_VERSION=0.3.0
 
 repo_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 build_dir=${BUILD_DIR:-"${repo_dir}/build/bench"}
 firedancer_dir=${FIREDANCER_DIR:-"${build_dir}/firedancer"}
 compiler=${CC:-cc}
+cargo_command=${CARGO:-cargo}
+cargo_home=${CARGO_HOME:-"${build_dir}/cargo-home"}
 
 mkdir -p "${build_dir}"
 
@@ -24,6 +27,11 @@ if [[ "${actual_commit}" != "${FIREDANCER_COMMIT}" ]]; then
   echo "warning: requested Firedancer commit ${FIREDANCER_COMMIT}" >&2
   echo "warning: using Firedancer commit     ${actual_commit}" >&2
 fi
+
+CARGO_HOME="${cargo_home}" RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native" \
+  "${cargo_command}" build --release --locked \
+  --manifest-path "${repo_dir}/bench/turbo_bridge/Cargo.toml" \
+  --target-dir "${build_dir}/turbo-target"
 
 common_flags=(
   -O3
@@ -53,6 +61,8 @@ common_flags=(
   "${build_dir}/braid58_encode.o" \
   "${build_dir}/braid58_decode.o" \
   "${build_dir}/firedancer_base58.o" \
+  "${build_dir}/turbo-target/release/libbase58_turbo_bridge.a" \
+  -ldl -lpthread -lm \
   -o "${build_dir}/bench_base58"
 
 allowed_cpus=$(awk '/Cpus_allowed_list/ { print $2 }' /proc/self/status)
@@ -64,7 +74,9 @@ trials=${BENCH_TRIALS:-15}
 echo "CPU: $(lscpu | awk -F: '/Model name/ { sub(/^[[:space:]]+/, "", $2); print $2; exit }')"
 echo "Pinned logical CPU: ${cpu} (allowed: ${allowed_cpus})"
 echo "Compiler: $("${compiler}" --version | head -n 1)"
+echo "Rust: $(rustc --version)"
 echo "Firedancer: ${actual_commit}"
+echo "Base58 Turbo: ${BASE58_TURBO_VERSION} (crates.io)"
 echo
 
 exec taskset -c "${cpu}" "${build_dir}/bench_base58" \

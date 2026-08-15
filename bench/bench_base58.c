@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include "braid58.h"
 
 #include <errno.h>
@@ -7,10 +9,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 enum {
   CORPUS_COUNT = 1024,
-  OP_COUNT = 6,
+  OP_COUNT = 10,
   MAX_TRIALS = 99
 };
 
@@ -20,6 +23,10 @@ char *firedancer_base58_encode_64(const unsigned char *, unsigned long *,
                                   char *);
 unsigned char *firedancer_base58_decode_32(const char *, unsigned char *);
 unsigned char *firedancer_base58_decode_64(const char *, unsigned char *);
+size_t turbo_base58_encode_32(const unsigned char *, unsigned char *);
+size_t turbo_base58_encode_64(const unsigned char *, unsigned char *);
+size_t turbo_base58_decode_32(const unsigned char *, size_t, unsigned char *);
+size_t turbo_base58_decode_64(const unsigned char *, size_t, unsigned char *);
 
 static uint8_t inputs32[CORPUS_COUNT][32] __attribute__((aligned(64)));
 static uint8_t inputs64[CORPUS_COUNT][64] __attribute__((aligned(64)));
@@ -53,6 +60,29 @@ tick_end(void) {
   return ticks;
 }
 
+static double
+monotonic_seconds(void) {
+  struct timespec now;
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &now) != 0) {
+    perror("clock_gettime");
+    exit(EXIT_FAILURE);
+  }
+  return (double)now.tv_sec + (double)now.tv_nsec * 1e-9;
+}
+
+static double
+calibrate_tsc_hz(void) {
+  const double seconds_start = monotonic_seconds();
+  const uint64_t ticks_start = tick_start();
+  double seconds_end;
+  do {
+    seconds_end = monotonic_seconds();
+  } while (seconds_end - seconds_start < 0.1);
+  const uint64_t ticks_end = tick_end();
+  return (double)(ticks_end - ticks_start) /
+         (seconds_end - seconds_start);
+}
+
 static void
 fail(const char *message, size_t index) {
   fprintf(stderr, "benchmark validation failed: %s (case %zu)\n",
@@ -83,6 +113,8 @@ prepare_and_validate(void) {
     unsigned long firedancer_length32 = 0;
     unsigned long firedancer_length64 = 0;
     char braid_output[45];
+    unsigned char turbo_output32[44];
+    unsigned char turbo_output64[88];
     unsigned long braid_length = 0;
 
     firedancer_base58_encode_32(inputs32[case_index],
@@ -92,6 +124,10 @@ prepare_and_validate(void) {
                                 &firedancer_length64,
                                 encoded64[case_index]);
     fd_base58_encode_32(inputs32[case_index], &braid_length, braid_output);
+    const size_t turbo_length32 =
+        turbo_base58_encode_32(inputs32[case_index], turbo_output32);
+    const size_t turbo_length64 =
+        turbo_base58_encode_64(inputs64[case_index], turbo_output64);
 
     if (firedancer_length32 != 44UL)
       fail("32-byte input did not encode to 44 characters", case_index);
@@ -101,10 +137,18 @@ prepare_and_validate(void) {
         memcmp(braid_output, encoded32[case_index],
                firedancer_length32 + 1UL) != 0)
       fail("Braid58 and Firedancer encoders disagree", case_index);
+    if (turbo_length32 != firedancer_length32 ||
+        memcmp(turbo_output32, encoded32[case_index], turbo_length32) != 0)
+      fail("Base58 Turbo and Firedancer 32-byte encoders disagree", case_index);
+    if (turbo_length64 != firedancer_length64 ||
+        memcmp(turbo_output64, encoded64[case_index], turbo_length64) != 0)
+      fail("Base58 Turbo and Firedancer 64-byte encoders disagree", case_index);
 
     uint8_t braid_decoded[32];
     uint8_t firedancer_decoded32[32];
     uint8_t firedancer_decoded64[64];
+    uint8_t turbo_decoded32[44];
+    uint8_t turbo_decoded64[88];
     if (!braid58_decode_32(encoded32[case_index], firedancer_length32,
                            braid_decoded) ||
         memcmp(braid_decoded, inputs32[case_index], 32) != 0)
@@ -117,6 +161,14 @@ prepare_and_validate(void) {
                                      firedancer_decoded64) ||
         memcmp(firedancer_decoded64, inputs64[case_index], 64) != 0)
       fail("Firedancer 64-byte decoder round trip", case_index);
+    if (turbo_base58_decode_32((const unsigned char *)encoded32[case_index],
+                               firedancer_length32, turbo_decoded32) != 32 ||
+        memcmp(turbo_decoded32, inputs32[case_index], 32) != 0)
+      fail("Base58 Turbo 32-byte decoder round trip", case_index);
+    if (turbo_base58_decode_64((const unsigned char *)encoded64[case_index],
+                               firedancer_length64, turbo_decoded64) != 64 ||
+        memcmp(turbo_decoded64, inputs64[case_index], 64) != 0)
+      fail("Base58 Turbo 64-byte decoder round trip", case_index);
   }
 }
 
@@ -147,6 +199,19 @@ bench_firedancer_encode_32(uint64_t iterations) {
 }
 
 static uint64_t
+bench_turbo_encode_32(uint64_t iterations) {
+  unsigned char output[64] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = turbo_base58_encode_32(
+        inputs32[iteration & (CORPUS_COUNT - 1)], output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
 bench_braid_decode_32(uint64_t iterations) {
   uint8_t output[32] __attribute__((aligned(64)));
   int success = 0;
@@ -173,6 +238,20 @@ bench_firedancer_decode_32(uint64_t iterations) {
 }
 
 static uint64_t
+bench_turbo_decode_32(uint64_t iterations) {
+  uint8_t output[64] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = turbo_base58_decode_32(
+        (const unsigned char *)encoded32[iteration & (CORPUS_COUNT - 1)],
+        44, output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
 bench_firedancer_encode_64(uint64_t iterations) {
   char output[128] __attribute__((aligned(64)));
   unsigned long length = 0;
@@ -186,6 +265,19 @@ bench_firedancer_encode_64(uint64_t iterations) {
 }
 
 static uint64_t
+bench_turbo_encode_64(uint64_t iterations) {
+  unsigned char output[96] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = turbo_base58_encode_64(
+        inputs64[iteration & (CORPUS_COUNT - 1)], output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
+  return end - start;
+}
+
+static uint64_t
 bench_firedancer_decode_64(uint64_t iterations) {
   uint8_t output[64] __attribute__((aligned(64)));
   unsigned char *result = NULL;
@@ -195,6 +287,20 @@ bench_firedancer_decode_64(uint64_t iterations) {
         encoded64[iteration & (CORPUS_COUNT - 1)], output);
   const uint64_t end = tick_end();
   result_sink += (uint64_t)output[0] + (uint64_t)(result != NULL);
+  return end - start;
+}
+
+static uint64_t
+bench_turbo_decode_64(uint64_t iterations) {
+  uint8_t output[96] __attribute__((aligned(64)));
+  size_t length = 0;
+  const uint64_t start = tick_start();
+  for (uint64_t iteration = 0; iteration < iterations; ++iteration)
+    length = turbo_base58_decode_64(
+        (const unsigned char *)encoded64[iteration & (CORPUS_COUNT - 1)],
+        88, output);
+  const uint64_t end = tick_end();
+  result_sink += (uint64_t)output[0] + length;
   return end - start;
 }
 
@@ -230,15 +336,21 @@ main(int argc, char **argv) {
   }
 
   prepare_and_validate();
+  const double tsc_hz = calibrate_tsc_hz();
 
   const char *const names[OP_COUNT] = {
-      "Braid58 encode 32", "Firedancer encode 32",
-      "Braid58 decode 32", "Firedancer decode 32",
-      "Firedancer encode 64", "Firedancer decode 64"};
+      "Braid58 encode 32", "Turbo encode 32", "Firedancer encode 32",
+      "Braid58 decode 32", "Turbo decode 32", "Firedancer decode 32",
+      "Turbo encode 64", "Firedancer encode 64",
+      "Turbo decode 64", "Firedancer decode 64"};
   uint64_t (*const benchmarks[OP_COUNT])(uint64_t) = {
-      bench_braid_encode_32, bench_firedancer_encode_32,
-      bench_braid_decode_32, bench_firedancer_decode_32,
-      bench_firedancer_encode_64, bench_firedancer_decode_64};
+      bench_braid_encode_32, bench_turbo_encode_32,
+      bench_firedancer_encode_32, bench_braid_decode_32,
+      bench_turbo_decode_32, bench_firedancer_decode_32,
+      bench_turbo_encode_64, bench_firedancer_encode_64,
+      bench_turbo_decode_64, bench_firedancer_decode_64};
+  const size_t bytes_per_call[OP_COUNT] = {
+      32, 32, 32, 44, 44, 44, 64, 64, 88, 88};
   double samples[OP_COUNT][MAX_TRIALS];
 
   for (size_t operation = 0; operation < OP_COUNT; ++operation)
@@ -252,20 +364,28 @@ main(int argc, char **argv) {
     }
   }
 
-  printf("validated: %d shared 32-byte cases and %d Firedancer 64-byte cases\n",
+  printf("validated: %d shared 32-byte cases and %d shared 64-byte cases\n",
          CORPUS_COUNT, CORPUS_COUNT);
   printf("corpus: hot-cache, deterministic, 44-char/88-char encodings\n");
+  printf("TSC calibration: %.3f GHz\n", tsc_hz / 1e9);
   printf("timing: unadjusted invariant-TSC ticks/call, %" PRIu64
          " calls x %zu trials\n\n",
          iterations, trials);
-  printf("%-24s %10s %10s %10s\n", "operation", "min", "median", "max");
+  printf("%-24s %10s %10s %10s %11s %10s\n",
+         "operation", "min", "median", "max", "Mcalls/s", "GiB/s");
   for (size_t operation = 0; operation < OP_COUNT; ++operation) {
     double ordered[MAX_TRIALS];
     memcpy(ordered, samples[operation], trials * sizeof(double));
     qsort(ordered, trials, sizeof(double), compare_double);
-    printf("%-24s %10.2f %10.2f %10.2f\n",
+    const double median_ticks = ordered[trials / 2];
+    const double calls_per_second = tsc_hz / median_ticks;
+    const double gib_per_second =
+        calls_per_second * (double)bytes_per_call[operation] /
+        1073741824.0;
+    printf("%-24s %10.2f %10.2f %10.2f %11.2f %10.3f\n",
            names[operation], ordered[0], ordered[trials / 2],
-           ordered[trials - 1]);
+           ordered[trials - 1], calls_per_second / 1e6,
+           gib_per_second);
   }
 
   printf("\nsink: %" PRIu64 "\n", result_sink);

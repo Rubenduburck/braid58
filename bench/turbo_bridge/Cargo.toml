@@ -1,0 +1,11 @@
+[package]
+name = "base58-turbo-bridge"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+base58-turbo = "=0.3.0"

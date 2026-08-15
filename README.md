@@ -54,20 +54,21 @@ decoder additionally requires VBMI2.  Build only on a machine where
 ```sh
 make test                  # build and run both embedded test programs
 make                       # build libbraid58.a
-make bench                 # compare with pinned Firedancer 32/64 Base58
+make bench                 # compare with Turbo and Firedancer at 32/64 bytes
 ```
 
 These run the embedded differential, leading-zero, API-contract, and rejection
 tests.  The Makefile compiles the library encoder with `-DBRAID58_NO_MAIN`.
 Equivalent explicit compiler commands are in `DESIGN.md`.
 
-The benchmark target fetches the pinned official Firedancer source on its first
-run, builds both implementations with the same native compiler flags, validates
-their results, pins execution to one logical CPU, and reports repeated
-invariant-TSC ticks per call.  Set `FIREDANCER_DIR` to use an existing checkout,
-or tune a run with `BENCH_CPU`, `BENCH_ITERATIONS`, and `BENCH_TRIALS`.  Braid58
-only implements the fixed-32 APIs; Firedancer's fixed-64 results are included as
-a standalone baseline rather than a direct comparison.
+The benchmark target fetches the pinned official Firedancer source and exact
+Base58 Turbo crate on its first run, builds all implementations for the native
+CPU, validates their results, pins execution to one logical CPU, and reports
+repeated invariant-TSC ticks, calls per second, and GiB/s.  Set `FIREDANCER_DIR`
+to use an existing checkout, or tune a run with `BENCH_CPU`,
+`BENCH_ITERATIONS`, and `BENCH_TRIALS`.  Braid58 only implements the fixed-32
+APIs; Turbo and Firedancer's fixed-64 results are included as standalone
+baselines rather than direct comparisons.
 
 ## Scope
 
