@@ -449,6 +449,9 @@ main(int argc, char **argv) {
 
   printf("validated: %d shared 32-byte cases and %d shared 64-byte cases\n",
          CORPUS_COUNT, CORPUS_COUNT);
+  printf("Braid58 backend: %s\n",
+         braid58_get_backend() == BRAID58_BACKEND_AVX512 ? "AVX-512" :
+         braid58_get_backend() == BRAID58_BACKEND_AVX2 ? "AVX2" : "scalar");
   printf("corpus: hot-cache, deterministic, 44-char/88-char encodings\n");
   printf("TSC calibration: %.3f GHz\n", tsc_hz / 1e9);
   printf("timing: unadjusted invariant-TSC ticks/call, %" PRIu64

@@ -5,10 +5,17 @@ include(CTest)
 include(GNUInstallDirs)
 include(CMakePackageConfigHelpers)
 
+option(BRAID58_ENABLE_AVX2 "Build the runtime-dispatched AVX2 backend" ON)
 option(BRAID58_ENABLE_AVX512 "Build the runtime-dispatched AVX-512 backend" ON)
 
 string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" BRAID58_PROCESSOR)
+set(BRAID58_HAVE_AVX2_KERNEL OFF)
 set(BRAID58_HAVE_AVX512_KERNEL OFF)
+if(BRAID58_ENABLE_AVX2
+   AND BRAID58_PROCESSOR MATCHES "^(x86_64|amd64)$"
+   AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
+  set(BRAID58_HAVE_AVX2_KERNEL ON)
+endif()
 if(BRAID58_ENABLE_AVX512
    AND BRAID58_PROCESSOR MATCHES "^(x86_64|amd64)$"
    AND CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
@@ -16,6 +23,9 @@ if(BRAID58_ENABLE_AVX512
 endif()
 
 set(BRAID58_SOURCES c/braid58.c)
+if(BRAID58_HAVE_AVX2_KERNEL)
+  list(APPEND BRAID58_SOURCES c/avx2.c)
+endif()
 if(BRAID58_HAVE_AVX512_KERNEL)
   list(APPEND BRAID58_SOURCES c/encode_avx512.c c/decode_avx512.c)
 endif()
@@ -28,6 +38,7 @@ target_compile_features(braid58_objects PRIVATE c_std_11)
 target_include_directories(braid58_objects PRIVATE include c)
 target_compile_definitions(braid58_objects PRIVATE
   BRAID58_BUILDING_LIBRARY
+  BRAID58_HAVE_AVX2_KERNEL=$<BOOL:${BRAID58_HAVE_AVX2_KERNEL}>
   BRAID58_HAVE_AVX512_KERNEL=$<BOOL:${BRAID58_HAVE_AVX512_KERNEL}>)
 
 if(CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
@@ -55,6 +66,7 @@ if(BUILD_TESTING)
   target_compile_features(braid58_test PRIVATE c_std_11)
   target_include_directories(braid58_test PRIVATE include c)
   target_compile_definitions(braid58_test PRIVATE
+    BRAID58_HAVE_AVX2_KERNEL=$<BOOL:${BRAID58_HAVE_AVX2_KERNEL}>
     BRAID58_HAVE_AVX512_KERNEL=$<BOOL:${BRAID58_HAVE_AVX512_KERNEL}>)
   if(CMAKE_C_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
     target_compile_options(braid58_test PRIVATE -Wall -Wextra -Wpedantic)

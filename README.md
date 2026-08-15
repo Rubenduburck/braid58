@@ -2,11 +2,11 @@
 
 Fast, fixed-width Bitcoin Base58 for 32-byte values.
 
-Braid58 provides a small C ABI and an allocation-free Rust API. It selects an
-AVX-512 radix-conversion kernel at runtime on supported x86-64 CPUs and falls
-back to a portable scalar implementation everywhere else. Encoding preserves
-Bitcoin's leading-zero rule; decoding accepts only canonical values that
-produce exactly 32 bytes.
+Braid58 provides a small C ABI and an allocation-free Rust API. It selects
+dedicated AVX-512 or AVX2 radix-conversion kernels at runtime on supported
+x86-64 CPUs and falls back to a portable scalar implementation everywhere
+else. Encoding preserves Bitcoin's leading-zero rule; decoding accepts only
+canonical values that produce exactly 32 bytes.
 
 ## Rust
 
@@ -77,12 +77,15 @@ The installed ABI exports only:
 
 ## CPU backends
 
-The optimized backend requires AVX2 and AVX-512 F, DQ, BW, VL, IFMA, VBMI,
-and VBMI2. The public API checks these features before dispatching, so binaries
-remain safe on unsupported CPUs. Disable the optimized backend with
-`-DBRAID58_ENABLE_AVX512=OFF` in CMake or the Rust `force-scalar` feature.
+The fastest backend requires AVX2 and AVX-512 F, DQ, BW, VL, IFMA, VBMI, and
+VBMI2. AVX2-only CPUs use a separate 256-bit implementation; other CPUs use
+the scalar backend. The public API checks every required feature before
+dispatching, so binaries remain safe on unsupported CPUs.
 
-GNU-compatible and Clang-compatible compilers build the AVX-512 backend on
+CMake exposes `BRAID58_ENABLE_AVX2` and `BRAID58_ENABLE_AVX512` independently.
+The Rust `force-scalar` feature disables both vector backends.
+
+GNU-compatible and Clang-compatible compilers build both vector backends on
 x86-64. Other compilers and architectures build the scalar backend only.
 
 ## Development
@@ -95,7 +98,7 @@ make bench       # Braid58, Base58 Turbo, five8, and Firedancer
 
 The C suite covers two million encoder differentials, 200,000 arbitrary
 decoder differentials, leading-zero cases, invalid bytes, overflow,
-canonicality, failure atomicity, and both runtime backends. The Rust tests
+canonicality, failure atomicity, and all three runtime backends. The Rust tests
 exercise the safe wrapper and forced-scalar build.
 
 On the recorded Threadripper PRO 9995WX run, the runtime-dispatched public C
@@ -103,6 +106,11 @@ API reached 2.142 GiB/s for 32-byte encoding and 3.357 GiB/s for 44-character
 decoding. These are hot-cache throughput results, not universal latency claims.
 See [BENCHMARKS.md](BENCHMARKS.md) for the complete same-host comparison and
 [DESIGN.md](DESIGN.md) for the radix construction.
+
+With Braid58 capped at AVX2 on the same CPU, the dedicated backend reached
+0.808 GiB/s encoding and 1.454 GiB/s decoding. It did not preserve the
+overall AVX-512 lead: its decoder beat Firedancer, but Turbo and five8 remained
+faster. The exact AVX2-capped results are recorded in `BENCHMARKS.md`.
 
 ## Scope
 

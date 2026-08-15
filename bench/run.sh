@@ -12,6 +12,7 @@ firedancer_dir=${FIREDANCER_DIR:-"${build_dir}/firedancer"}
 compiler=${CC:-cc}
 cargo_command=${CARGO:-cargo}
 cargo_home=${CARGO_HOME:-"${build_dir}/cargo-home"}
+braid_max_isa=${BENCH_BRAID_MAX_ISA:-native}
 
 mkdir -p "${build_dir}"
 
@@ -44,21 +45,58 @@ portable_flags=(
 )
 native_flags=("${portable_flags[@]}" -march=native)
 
+case "${braid_max_isa}" in
+  native)
+    braid_avx2=1
+    braid_avx512=1
+    ;;
+  avx2)
+    braid_avx2=1
+    braid_avx512=0
+    ;;
+  scalar)
+    braid_avx2=0
+    braid_avx512=0
+    ;;
+  *)
+    echo "BENCH_BRAID_MAX_ISA must be native, avx2, or scalar" >&2
+    exit 2
+    ;;
+esac
+
 "${compiler}" "${portable_flags[@]}" -mtune=native \
-  -DBRAID58_BUILDING_LIBRARY -DBRAID58_HAVE_AVX512_KERNEL=1 \
+  -DBRAID58_BUILDING_LIBRARY \
+  -DBRAID58_HAVE_AVX2_KERNEL="${braid_avx2}" \
+  -DBRAID58_HAVE_AVX512_KERNEL="${braid_avx512}" \
   -I"${repo_dir}/include" -I"${repo_dir}/c" \
   -c "${repo_dir}/c/braid58.c" \
   -o "${build_dir}/braid58.o"
-"${compiler}" "${portable_flags[@]}" -mtune=native \
-  -DBRAID58_HAVE_AVX512_KERNEL=1 \
-  -I"${repo_dir}/include" -I"${repo_dir}/c" \
-  -c "${repo_dir}/c/encode_avx512.c" \
-  -o "${build_dir}/braid58_encode.o"
-"${compiler}" "${portable_flags[@]}" -mtune=native \
-  -DBRAID58_HAVE_AVX512_KERNEL=1 \
-  -I"${repo_dir}/include" -I"${repo_dir}/c" \
-  -c "${repo_dir}/c/decode_avx512.c" \
-  -o "${build_dir}/braid58_decode.o"
+braid_objects=("${build_dir}/braid58.o")
+if (( braid_avx2 )); then
+  "${compiler}" "${portable_flags[@]}" -mtune=native \
+    -DBRAID58_HAVE_AVX2_KERNEL=1 \
+    -DBRAID58_HAVE_AVX512_KERNEL="${braid_avx512}" \
+    -I"${repo_dir}/include" -I"${repo_dir}/c" \
+    -c "${repo_dir}/c/avx2.c" \
+    -o "${build_dir}/braid58_avx2.o"
+  braid_objects+=("${build_dir}/braid58_avx2.o")
+fi
+if (( braid_avx512 )); then
+  "${compiler}" "${portable_flags[@]}" -mtune=native \
+    -DBRAID58_HAVE_AVX2_KERNEL="${braid_avx2}" \
+    -DBRAID58_HAVE_AVX512_KERNEL=1 \
+    -I"${repo_dir}/include" -I"${repo_dir}/c" \
+    -c "${repo_dir}/c/encode_avx512.c" \
+    -o "${build_dir}/braid58_encode.o"
+  "${compiler}" "${portable_flags[@]}" -mtune=native \
+    -DBRAID58_HAVE_AVX2_KERNEL="${braid_avx2}" \
+    -DBRAID58_HAVE_AVX512_KERNEL=1 \
+    -I"${repo_dir}/include" -I"${repo_dir}/c" \
+    -c "${repo_dir}/c/decode_avx512.c" \
+    -o "${build_dir}/braid58_decode.o"
+  braid_objects+=("${build_dir}/braid58_encode.o"
+                   "${build_dir}/braid58_decode.o")
+fi
 "${compiler}" "${native_flags[@]}" -DFD_HAS_AVX=1 -DFD_HAS_SSE=1 \
   -Dfd_base58_encode_32=firedancer_base58_encode_32 \
   -Dfd_base58_encode_64=firedancer_base58_encode_64 \
@@ -69,9 +107,7 @@ native_flags=("${portable_flags[@]}" -march=native)
   -o "${build_dir}/firedancer_base58.o"
 "${compiler}" "${native_flags[@]}" -I"${repo_dir}/include" \
   "${repo_dir}/bench/bench_base58.c" \
-  "${build_dir}/braid58.o" \
-  "${build_dir}/braid58_encode.o" \
-  "${build_dir}/braid58_decode.o" \
+  "${braid_objects[@]}" \
   "${build_dir}/firedancer_base58.o" \
   "${build_dir}/turbo-target/release/libbase58_turbo_bridge.a" \
   -ldl -lpthread -lm \
@@ -90,6 +126,7 @@ echo "Rust: $(rustc --version)"
 echo "Firedancer: ${actual_commit}"
 echo "Base58 Turbo: ${BASE58_TURBO_VERSION} (crates.io)"
 echo "five8: ${FIVE8_VERSION} (crates.io)"
+echo "Braid58 ISA ceiling: ${braid_max_isa}"
 echo
 
 exec taskset -c "${cpu}" "${build_dir}/bench_base58" \

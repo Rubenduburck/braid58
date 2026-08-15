@@ -5,7 +5,8 @@
 The repository benchmark was run on an AMD Ryzen Threadripper PRO 9995WX
 96-Core, pinned to logical CPU 31.  Braid58 used its runtime-dispatched public
 C API, compiled with GCC 16.2.1 at `-O3 -mtune=native`; its private AVX-512
-functions carry explicit target attributes.  Firedancer and the C harness used
+and AVX2 functions carry explicit target attributes. Firedancer and the C
+harness used
 `-O3 -march=native -fno-stack-protector`.  Base58 Turbo 0.3.0 and five8 1.0.0
 used their Cargo release profiles with Rust 1.96.0 and
 `-C target-cpu=native`.  The Firedancer comparison is official commit
@@ -42,12 +43,38 @@ counts encoded input bytes (44 or 88 per call).
 | Firedancer decode 64 | 357.95 | 369.86 | 391.39 | 6.76 | 0.554 |
 
 At the median, Braid58 used 36.1% fewer TSC ticks than Base58 Turbo for 32-byte
-encoding and 31.0% fewer for decoding.  Against five8, the reductions were
-56.0% and 52.6%, or 2.27x and 2.11x the call throughput.  Against Firedancer,
-the reductions were 49.9% and 70.3%.  At 64 bytes Turbo was fastest for both
-operations.  five8 used 2.8% fewer encoding ticks and 30.3% fewer decoding
-ticks than Firedancer.  Braid58 has no 64-byte implementation, so those rows
+encoding and 31.0% fewer for decoding. Against five8, the reductions were
+56.0% and 52.6%, or 2.27x and 2.11x the call throughput. Against Firedancer,
+the reductions were 49.9% and 70.3%. At 64 bytes Turbo was fastest for both
+operations. five8 used 2.8% fewer encoding ticks and 30.3% fewer decoding
+ticks than Firedancer. Braid58 has no 64-byte implementation, so those rows
 are standalone baselines rather than direct comparisons.
+
+### AVX2-only Braid58
+
+The same harness was rebuilt with `BENCH_BRAID_MAX_ISA=avx2`, which omits the
+AVX-512 objects and makes the public dispatcher select the dedicated AVX2
+backend. Competitor settings, inputs, pinning, throughput accounting, trial
+count, and validation were unchanged.
+
+| Operation | Min ticks | Median ticks | Max ticks | Mcalls/s | GiB/s |
+|---|---:|---:|---:|---:|---:|
+| Braid58 AVX2 encode 32 | 91.00 | 92.15 | 98.19 | 27.13 | 0.808 |
+| Base58 Turbo encode 32 | 52.62 | 54.02 | 57.76 | 46.27 | 1.379 |
+| five8 encode 32 | 77.95 | 79.39 | 85.32 | 31.49 | 0.939 |
+| Firedancer encode 32 | 68.39 | 69.35 | 75.17 | 36.05 | 1.074 |
+| Braid58 AVX2 decode 32 | 69.37 | 70.43 | 76.92 | 35.49 | 1.454 |
+| Base58 Turbo decode 32 | 44.11 | 45.11 | 49.45 | 55.41 | 2.271 |
+| five8 decode 32 | 61.89 | 63.24 | 68.21 | 39.53 | 1.620 |
+| Firedancer decode 32 | 101.97 | 107.41 | 111.69 | 23.27 | 0.954 |
+
+The AVX2 result does not preserve Braid58's overall AVX-512 advantage. Its
+encoder used 70.6% more median ticks than Turbo, 16.1% more than five8, and
+32.9% more than Firedancer. Its decoder used 56.1% more ticks than Turbo and
+11.4% more than five8, but 34.4% fewer than Firedancer, giving 1.53x
+Firedancer's call throughput. The backend remains useful as a roughly
+20x-faster fallback than the portable scalar implementation on this host, but
+it is not an AVX2 performance winner overall.
 
 These local absolute numbers are much lower than the EPYC record in
 `DESIGN.md`, but that does not contradict it: invariant-TSC rate, boost state,
@@ -63,4 +90,5 @@ Reproduce with:
 ```sh
 make test
 BENCH_CPU=31 make bench
+BENCH_CPU=31 BENCH_BRAID_MAX_ISA=avx2 make bench
 ```

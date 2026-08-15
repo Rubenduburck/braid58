@@ -41,6 +41,19 @@ check_value(const uint8_t input[32], uint64_t iteration) {
       memcmp(decoded, input, sizeof(decoded)) != 0)
     fail("public round trip", iteration);
 
+#if BRAID58_HAVE_AVX2_KERNEL
+  if (braid58_get_backend() != BRAID58_BACKEND_SCALAR) {
+    char avx[45];
+    const size_t avx_len = braid58_encode_32_avx2(input, avx);
+    if (avx_len != expected_len ||
+        memcmp(avx, expected, expected_len + 1U) != 0)
+      fail("AVX2 encoder differential", iteration);
+    if (!braid58_decode_32_avx2(avx, avx_len, decoded) ||
+        memcmp(decoded, input, sizeof(decoded)) != 0)
+      fail("AVX2 round trip", iteration);
+  }
+#endif
+
 #if BRAID58_HAVE_AVX512_KERNEL
   if (braid58_get_backend() == BRAID58_BACKEND_AVX512) {
     char avx[45];
@@ -87,6 +100,7 @@ check_api(void) {
 
   const braid58_backend backend = braid58_get_backend();
   if (backend != BRAID58_BACKEND_SCALAR &&
+      backend != BRAID58_BACKEND_AVX2 &&
       backend != BRAID58_BACKEND_AVX512)
     fail("unknown backend", (uint64_t)backend);
 }
@@ -139,6 +153,15 @@ check_arbitrary_strings(uint64_t *state) {
         (actual_ok && memcmp(actual, expected, sizeof(actual)) != 0))
       fail("decoder differential", iteration);
 
+#if BRAID58_HAVE_AVX2_KERNEL
+    if (braid58_get_backend() != BRAID58_BACKEND_SCALAR) {
+      const int avx_ok = braid58_decode_32_avx2(encoded, length, actual);
+      if (avx_ok != expected_ok ||
+          (avx_ok && memcmp(actual, expected, sizeof(actual)) != 0))
+        fail("AVX2 decoder differential", iteration);
+    }
+#endif
+
 #if BRAID58_HAVE_AVX512_KERNEL
     if (braid58_get_backend() == BRAID58_BACKEND_AVX512) {
       const int avx_ok = braid58_decode_32_avx512(encoded, length, actual);
@@ -187,6 +210,7 @@ main(void) {
   check_arbitrary_strings(&state);
   check_invalid_inputs();
   printf("braid58 C tests passed (backend: %s)\n",
-         braid58_get_backend() == BRAID58_BACKEND_AVX512 ? "AVX-512" : "scalar");
+         braid58_get_backend() == BRAID58_BACKEND_AVX512 ? "AVX-512" :
+         braid58_get_backend() == BRAID58_BACKEND_AVX2 ? "AVX2" : "scalar");
   return EXIT_SUCCESS;
 }

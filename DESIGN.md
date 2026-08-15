@@ -117,16 +117,19 @@ bytes, and unsupported lengths.
 
 ## 4. Instruction-set and implementation scope
 
-The encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. The decoder additionally
-uses VBMI2. These kernels are private target-attributed functions. The public
-API checks the complete feature set and otherwise calls the scalar backend, so
-the installed library is safe to run on unsupported CPUs.
+The fastest encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. Its decoder
+additionally uses VBMI2. A separate AVX2 backend retains the radix-`58^6`
+matrix but splits its eight 64-bit cells across two YMM vectors. Its decoder
+uses vector classification and digit grouping followed by a width-aware
+256-bit Horner conversion. These kernels are private target-attributed
+functions. The public API checks the complete feature set, prefers AVX-512,
+then AVX2, and otherwise calls the scalar backend.
 
-The CMake build enables the optimized backend on x86-64 with GCC-compatible or
+The CMake build enables both vector backends on x86-64 with GCC-compatible or
 Clang-compatible compilers. Other configurations build scalar-only. The C ABI
 documents non-overlapping buffers and failure behavior; the Rust wrapper makes
-the common operations safe and allocation-free. Neither backend has received a
-security audit or application-level fuzzing.
+the common operations safe and allocation-free. The implementations have not
+received a security audit or application-level fuzzing.
 
 ## 5. Correctness work completed
 
@@ -134,14 +137,15 @@ The bundled self-tests cover:
 
 - Encoder differentials for 1,000,000 MSB-nonzero and 1,000,000 unrestricted
   values, plus all-zero, integer one, maximum value, and every leading-zero
-  prefix. Public, scalar, and AVX-512 results are compared when available.
+  prefix. Public, scalar, AVX2, and AVX-512 results are compared when available.
 - Decoder round trips for the encoder corpus and 200,000 arbitrary
   32–44-character alphabet strings, including accept/reject differentials
-  between the scalar and AVX-512 implementations.
+  between the scalar, AVX2, and AVX-512 implementations.
 - All 198 byte values outside the 58-character Bitcoin alphabet.
 - Overflow, length, decoded-width, canonicality, NULL handling, known vectors,
   and the guarantee that failed decoding leaves output unchanged.
-- Native and forced-scalar C and Rust builds.
+- Native, AVX2-only, and forced-scalar C builds, plus native and forced-scalar
+  Rust builds.
 
 These tests are meaningful evidence for the tested code, not a substitute for
 continuous fuzzing or an independent audit.

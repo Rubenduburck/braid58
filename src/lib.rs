@@ -1,8 +1,7 @@
 //! Fixed-width Bitcoin Base58 for 32-byte values.
 //!
-//! Braid58 is allocation-free and selects its AVX-512 implementation at
-//! runtime when the required instructions are available. Other CPUs use the
-//! portable scalar implementation.
+//! Braid58 is allocation-free and selects dedicated AVX-512 or AVX2
+//! implementations at runtime. Other CPUs use the portable scalar backend.
 //!
 //! ```
 //! let bytes = [42_u8; 32];
@@ -36,6 +35,8 @@ unsafe extern "C" {
 pub enum Backend {
     /// Portable scalar conversion.
     Scalar,
+    /// AVX2 conversion.
+    Avx2,
     /// AVX2 plus AVX-512 F/DQ/BW/VL/IFMA/VBMI/VBMI2.
     Avx512,
 }
@@ -45,7 +46,8 @@ pub enum Backend {
 pub fn backend() -> Backend {
     // SAFETY: The function takes no pointers and has no preconditions.
     match unsafe { braid58_get_backend() } {
-        1 => Backend::Avx512,
+        1 => Backend::Avx2,
+        2 => Backend::Avx512,
         _ => Backend::Scalar,
     }
 }
@@ -218,6 +220,9 @@ mod tests {
 
     #[test]
     fn backend_is_known() {
-        assert!(matches!(backend(), Backend::Scalar | Backend::Avx512));
+        assert!(matches!(
+            backend(),
+            Backend::Scalar | Backend::Avx2 | Backend::Avx512
+        ));
     }
 }

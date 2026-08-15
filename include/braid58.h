@@ -33,7 +33,8 @@ enum {
 
 typedef enum braid58_backend {
   BRAID58_BACKEND_SCALAR = 0,
-  BRAID58_BACKEND_AVX512 = 1
+  BRAID58_BACKEND_AVX2 = 1,
+  BRAID58_BACKEND_AVX512 = 2
 } braid58_backend;
 
 /* Returns the implementation selected for this process and CPU. */

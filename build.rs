@@ -6,6 +6,7 @@ fn main() {
     for path in [
         "c/braid58.c",
         "c/braid58_internal.h",
+        "c/avx2.c",
         "c/encode_avx512.c",
         "c/decode_avx512.c",
         "include/braid58.h",
@@ -29,11 +30,15 @@ fn main() {
 
     if native_x86_64 {
         build
+            .file("c/avx2.c")
             .file("c/encode_avx512.c")
             .file("c/decode_avx512.c")
+            .define("BRAID58_HAVE_AVX2_KERNEL", "1")
             .define("BRAID58_HAVE_AVX512_KERNEL", "1");
     } else {
-        build.define("BRAID58_HAVE_AVX512_KERNEL", "0");
+        build
+            .define("BRAID58_HAVE_AVX2_KERNEL", "0")
+            .define("BRAID58_HAVE_AVX512_KERNEL", "0");
     }
 
     if compiler.is_like_gnu() || compiler.is_like_clang() {

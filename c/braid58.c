@@ -20,6 +20,12 @@ braid58_get_backend(void) {
       __builtin_cpu_supports("avx512vbmi2"))
     return BRAID58_BACKEND_AVX512;
 #endif
+#if BRAID58_HAVE_AVX2_KERNEL &&                                     \
+    (defined(__GNUC__) || defined(__clang__)) &&                    \
+    (defined(__x86_64__) || defined(__i386__))
+  if (__builtin_cpu_supports("avx2"))
+    return BRAID58_BACKEND_AVX2;
+#endif
   return BRAID58_BACKEND_SCALAR;
 }
 
@@ -104,9 +110,16 @@ braid58_encode_32(const uint8_t input[BRAID58_BINARY_32_SIZE],
                   char output[BRAID58_ENCODED_32_CAPACITY]) {
   if (input == NULL || output == NULL)
     return 0;
+#if BRAID58_HAVE_AVX2_KERNEL || BRAID58_HAVE_AVX512_KERNEL
+  const braid58_backend backend = braid58_get_backend();
+#endif
 #if BRAID58_HAVE_AVX512_KERNEL
-  if (braid58_get_backend() == BRAID58_BACKEND_AVX512)
+  if (backend == BRAID58_BACKEND_AVX512)
     return braid58_encode_32_avx512(input, output);
+#endif
+#if BRAID58_HAVE_AVX2_KERNEL
+  if (backend == BRAID58_BACKEND_AVX2)
+    return braid58_encode_32_avx2(input, output);
 #endif
   return braid58_encode_32_scalar(input, output);
 }
@@ -116,9 +129,16 @@ braid58_decode_32(const char *input, size_t length,
                   uint8_t output[BRAID58_BINARY_32_SIZE]) {
   if (input == NULL || output == NULL)
     return 0;
+#if BRAID58_HAVE_AVX2_KERNEL || BRAID58_HAVE_AVX512_KERNEL
+  const braid58_backend backend = braid58_get_backend();
+#endif
 #if BRAID58_HAVE_AVX512_KERNEL
-  if (braid58_get_backend() == BRAID58_BACKEND_AVX512)
+  if (backend == BRAID58_BACKEND_AVX512)
     return braid58_decode_32_avx512(input, length, output);
+#endif
+#if BRAID58_HAVE_AVX2_KERNEL
+  if (backend == BRAID58_BACKEND_AVX2)
+    return braid58_decode_32_avx2(input, length, output);
 #endif
   return braid58_decode_32_scalar(input, length, output);
 }
