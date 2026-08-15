@@ -1,4 +1,6 @@
 /build/
+/target/
+/Cargo.lock
 /Braid58-AVX512-prototype.zip
 *.a
 *.o

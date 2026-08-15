@@ -34,22 +34,32 @@ CARGO_HOME="${cargo_home}" RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=native" \
   --manifest-path "${repo_dir}/bench/turbo_bridge/Cargo.toml" \
   --target-dir "${build_dir}/turbo-target"
 
-common_flags=(
+portable_flags=(
   -O3
-  -march=native
+  -std=c17
   -fno-stack-protector
   -Wall
   -Wextra
   -Werror
 )
+native_flags=("${portable_flags[@]}" -march=native)
 
-"${compiler}" "${common_flags[@]}" -DBRAID58_NO_MAIN \
-  -I"${repo_dir}/include" -c "${repo_dir}/src/encode_r6.c" \
+"${compiler}" "${portable_flags[@]}" -mtune=native \
+  -DBRAID58_BUILDING_LIBRARY -DBRAID58_HAVE_AVX512_KERNEL=1 \
+  -I"${repo_dir}/include" -I"${repo_dir}/c" \
+  -c "${repo_dir}/c/braid58.c" \
+  -o "${build_dir}/braid58.o"
+"${compiler}" "${portable_flags[@]}" -mtune=native \
+  -DBRAID58_HAVE_AVX512_KERNEL=1 \
+  -I"${repo_dir}/include" -I"${repo_dir}/c" \
+  -c "${repo_dir}/c/encode_avx512.c" \
   -o "${build_dir}/braid58_encode.o"
-"${compiler}" "${common_flags[@]}" -I"${repo_dir}/include" \
-  -c "${repo_dir}/src/decode_r6.c" \
+"${compiler}" "${portable_flags[@]}" -mtune=native \
+  -DBRAID58_HAVE_AVX512_KERNEL=1 \
+  -I"${repo_dir}/include" -I"${repo_dir}/c" \
+  -c "${repo_dir}/c/decode_avx512.c" \
   -o "${build_dir}/braid58_decode.o"
-"${compiler}" "${common_flags[@]}" -DFD_HAS_AVX=1 -DFD_HAS_SSE=1 \
+"${compiler}" "${native_flags[@]}" -DFD_HAS_AVX=1 -DFD_HAS_SSE=1 \
   -Dfd_base58_encode_32=firedancer_base58_encode_32 \
   -Dfd_base58_encode_64=firedancer_base58_encode_64 \
   -Dfd_base58_decode_32=firedancer_base58_decode_32 \
@@ -57,8 +67,9 @@ common_flags=(
   -I"${firedancer_dir}/src" \
   -c "${firedancer_dir}/src/ballet/base58/fd_base58.c" \
   -o "${build_dir}/firedancer_base58.o"
-"${compiler}" "${common_flags[@]}" -I"${repo_dir}/include" \
+"${compiler}" "${native_flags[@]}" -I"${repo_dir}/include" \
   "${repo_dir}/bench/bench_base58.c" \
+  "${build_dir}/braid58.o" \
   "${build_dir}/braid58_encode.o" \
   "${build_dir}/braid58_decode.o" \
   "${build_dir}/firedancer_base58.o" \

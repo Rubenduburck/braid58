@@ -4,29 +4,56 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(_WIN32) && defined(BRAID58_SHARED)
+#  if defined(BRAID58_BUILDING_LIBRARY)
+#    define BRAID58_API __declspec(dllexport)
+#  else
+#    define BRAID58_API __declspec(dllimport)
+#  endif
+#elif defined(__GNUC__) || defined(__clang__)
+#  define BRAID58_API __attribute__((visibility("default")))
+#else
+#  define BRAID58_API
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-enum { BRAID58_ENCODED_32_CAPACITY = 45 };
+#define BRAID58_VERSION_MAJOR 0
+#define BRAID58_VERSION_MINOR 1
+#define BRAID58_VERSION_PATCH 0
+#define BRAID58_VERSION_STRING "0.1.0"
 
-/* Encodes exactly 32 big-endian bytes using the Bitcoin Base58 alphabet.
-   `output` receives a NUL-terminated string; the returned length excludes
-   the terminator. */
-size_t braid58_encode_32(const uint8_t input[32],
-                         char output[BRAID58_ENCODED_32_CAPACITY]);
+enum {
+  BRAID58_BINARY_32_SIZE = 32,
+  BRAID58_ENCODED_32_MAX_LEN = 44,
+  BRAID58_ENCODED_32_CAPACITY = 45
+};
 
-/* Decodes a canonical 32..44-character Bitcoin Base58 string that represents
-   exactly 32 bytes. Returns 1 on success and 0 on invalid/noncanonical input;
-   output is untouched on failure. */
-int braid58_decode_32(const char *input, size_t length,
-                      uint8_t output[32]);
+typedef enum braid58_backend {
+  BRAID58_BACKEND_SCALAR = 0,
+  BRAID58_BACKEND_AVX512 = 1
+} braid58_backend;
 
-/* Firedancer-compatible fixed-32 encoding surface. `optional_length` may be
-   NULL. `output` must hold BRAID58_ENCODED_32_CAPACITY bytes; the function
-   NUL-terminates it and returns `output`. */
-char *fd_base58_encode_32(const void *bytes, unsigned long *optional_length,
-                          char *output);
+/* Returns the implementation selected for this process and CPU. */
+BRAID58_API braid58_backend braid58_get_backend(void);
+
+/* Encodes exactly 32 bytes with the Bitcoin Base58 alphabet.
+
+   output receives a NUL-terminated string. The return value is its length,
+   excluding the terminator, or zero when input or output is NULL. Input and
+   output must not overlap. */
+BRAID58_API size_t
+braid58_encode_32(const uint8_t input[BRAID58_BINARY_32_SIZE],
+                  char output[BRAID58_ENCODED_32_CAPACITY]);
+
+/* Decodes a canonical 32..44-byte Bitcoin Base58 string representing exactly
+   32 bytes. Returns one on success and zero on invalid input. output is left
+   unchanged on failure. Input and output must not overlap. */
+BRAID58_API int
+braid58_decode_32(const char *input, size_t length,
+                  uint8_t output[BRAID58_BINARY_32_SIZE]);
 
 #ifdef __cplusplus
 }

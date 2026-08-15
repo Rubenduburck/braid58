@@ -3,12 +3,13 @@
 ## 2026-08-15 comparison with Base58 Turbo, five8, and Firedancer
 
 The repository benchmark was run on an AMD Ryzen Threadripper PRO 9995WX
-96-Core, pinned to logical CPU 31.  Braid58, Firedancer, and the C harness used
-GCC 16.2.1 with `-O3 -march=native -fno-stack-protector`.  Base58 Turbo 0.3.0
-and five8 1.0.0 used their Cargo release profiles with Rust 1.96.0 and
-`-C target-cpu=native`.  Their AVX2 paths were enabled.  The Firedancer
-comparison is official commit `e14b9929232019aa61f9258406a4c926e5fee75a`
-with its AVX2 path.
+96-Core, pinned to logical CPU 31.  Braid58 used its runtime-dispatched public
+C API, compiled with GCC 16.2.1 at `-O3 -mtune=native`; its private AVX-512
+functions carry explicit target attributes.  Firedancer and the C harness used
+`-O3 -march=native -fno-stack-protector`.  Base58 Turbo 0.3.0 and five8 1.0.0
+used their Cargo release profiles with Rust 1.96.0 and
+`-C target-cpu=native`.  The Firedancer comparison is official commit
+`e14b9929232019aa61f9258406a4c926e5fee75a` with its AVX2 path.
 
 Before timing, the harness compared Braid58, Base58 Turbo, five8, and
 Firedancer encodings and round-trips for 1,024 deterministic 32-byte inputs.
@@ -25,37 +26,37 @@ counts encoded input bytes (44 or 88 per call).
 
 | Operation | Min ticks | Median ticks | Max ticks | Mcalls/s | GiB/s |
 |---|---:|---:|---:|---:|---:|
-| Braid58 encode 32 | 35.18 | 35.55 | 38.42 | 70.33 | 2.096 |
-| Base58 Turbo encode 32 | 52.60 | 54.01 | 58.81 | 46.28 | 1.379 |
-| five8 encode 32 | 77.95 | 78.54 | 86.02 | 31.83 | 0.949 |
-| Firedancer encode 32 | 68.44 | 68.81 | 74.58 | 36.33 | 1.083 |
-| Braid58 decode 32 | 27.94 | 27.99 | 30.47 | 89.31 | 3.660 |
-| Base58 Turbo decode 32 | 43.98 | 44.41 | 49.32 | 56.30 | 2.307 |
-| five8 decode 32 | 61.71 | 62.70 | 70.67 | 39.87 | 1.634 |
-| Firedancer decode 32 | 100.45 | 101.23 | 110.60 | 24.70 | 1.012 |
-| Base58 Turbo encode 64 | 100.12 | 100.87 | 109.97 | 24.78 | 1.477 |
-| five8 encode 64 | 127.57 | 128.85 | 140.48 | 19.40 | 1.156 |
-| Firedancer encode 64 | 122.41 | 122.84 | 130.29 | 20.35 | 1.213 |
-| Base58 Turbo decode 64 | 79.59 | 80.73 | 89.50 | 30.97 | 2.538 |
-| five8 decode 64 | 253.12 | 255.60 | 282.63 | 9.78 | 0.802 |
-| Firedancer decode 64 | 360.01 | 366.79 | 381.98 | 6.82 | 0.559 |
+| Braid58 encode 32 | 34.34 | 34.79 | 37.44 | 71.87 | 2.142 |
+| Base58 Turbo encode 32 | 53.49 | 54.47 | 58.26 | 45.90 | 1.368 |
+| five8 encode 32 | 78.05 | 79.06 | 85.34 | 31.62 | 0.942 |
+| Firedancer encode 32 | 68.52 | 69.44 | 74.75 | 36.00 | 1.073 |
+| Braid58 decode 32 | 30.26 | 30.52 | 33.08 | 81.92 | 3.357 |
+| Base58 Turbo decode 32 | 44.02 | 44.26 | 48.03 | 56.48 | 2.314 |
+| five8 decode 32 | 62.61 | 64.43 | 68.64 | 38.80 | 1.590 |
+| Firedancer decode 32 | 100.90 | 102.74 | 109.69 | 24.33 | 0.997 |
+| Base58 Turbo encode 64 | 100.12 | 100.95 | 108.96 | 24.76 | 1.476 |
+| five8 encode 64 | 119.03 | 120.45 | 131.16 | 20.75 | 1.237 |
+| Firedancer encode 64 | 122.83 | 123.96 | 133.79 | 20.17 | 1.202 |
+| Base58 Turbo decode 64 | 80.78 | 81.89 | 88.22 | 30.53 | 2.502 |
+| five8 decode 64 | 254.87 | 257.79 | 275.03 | 9.70 | 0.795 |
+| Firedancer decode 64 | 357.95 | 369.86 | 391.39 | 6.76 | 0.554 |
 
-At the median, Braid58 used 34.2% fewer TSC ticks than Base58 Turbo for 32-byte
-encoding and 37.0% fewer for decoding.  Against five8, the reductions were
-54.7% and 55.4%, or 2.21x and 2.24x the call throughput.  Against Firedancer,
-the reductions were 48.3% and 72.4%.  At 64 bytes Turbo was fastest for both
-operations.  five8 encoding used 4.9% more ticks than Firedancer, while its
-decoder used 30.3% fewer.  Braid58 has no 64-byte implementation, so those
-rows are standalone baselines rather than direct comparisons.
+At the median, Braid58 used 36.1% fewer TSC ticks than Base58 Turbo for 32-byte
+encoding and 31.0% fewer for decoding.  Against five8, the reductions were
+56.0% and 52.6%, or 2.27x and 2.11x the call throughput.  Against Firedancer,
+the reductions were 49.9% and 70.3%.  At 64 bytes Turbo was fastest for both
+operations.  five8 used 2.8% fewer encoding ticks and 30.3% fewer decoding
+ticks than Firedancer.  Braid58 has no 64-byte implementation, so those rows
+are standalone baselines rather than direct comparisons.
 
 These local absolute numbers are much lower than the EPYC record in
 `DESIGN.md`, but that does not contradict it: invariant-TSC rate, boost state,
 AVX-512 behavior, compiler, and microarchitecture all differ.  The bundled
 correctness claims reproduced.  The original benchmark harness is absent from
 the archive, so its exact EPYC ranges still cannot be regenerated.  This
-same-host run does reproduce the claimed ordering against the exact Base58
-Turbo 0.3.0 release, with a larger local margin, while adding five8 1.0.0 as a
-second Rust baseline in a new documented harness.
+same-host run reproduces the claimed ordering against the exact Base58 Turbo
+0.3.0 release while including both runtime dispatch and the complete public
+API.  five8 1.0.0 remains a second Rust baseline in the documented harness.
 
 Reproduce with:
 

@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/@CMAKE_INSTALL_LIBDIR@
+includedir=${prefix}/@CMAKE_INSTALL_INCLUDEDIR@
+
+Name: braid58
+Description: Fixed-width Bitcoin Base58 for 32-byte values
+Version: @PROJECT_VERSION@
+Libs: -L${libdir} -lbraid58
+Cflags: -I${includedir}

@@ -121,7 +121,6 @@ prepare_and_validate(void) {
     unsigned char turbo_output64[88];
     unsigned char five8_output32[44];
     unsigned char five8_output64[88];
-    unsigned long braid_length = 0;
 
     firedancer_base58_encode_32(inputs32[case_index],
                                 &firedancer_length32,
@@ -129,7 +128,8 @@ prepare_and_validate(void) {
     firedancer_base58_encode_64(inputs64[case_index],
                                 &firedancer_length64,
                                 encoded64[case_index]);
-    fd_base58_encode_32(inputs32[case_index], &braid_length, braid_output);
+    const size_t braid_length =
+        braid58_encode_32(inputs32[case_index], braid_output);
     const size_t turbo_length32 =
         turbo_base58_encode_32(inputs32[case_index], turbo_output32);
     const size_t turbo_length64 =
@@ -201,11 +201,11 @@ prepare_and_validate(void) {
 static uint64_t
 bench_braid_encode_32(uint64_t iterations) {
   char output[96] __attribute__((aligned(64)));
-  unsigned long length = 0;
+  size_t length = 0;
   const uint64_t start = tick_start();
   for (uint64_t iteration = 0; iteration < iterations; ++iteration)
-    fd_base58_encode_32(inputs32[iteration & (CORPUS_COUNT - 1)],
-                        &length, output);
+    length = braid58_encode_32(
+        inputs32[iteration & (CORPUS_COUNT - 1)], output);
   const uint64_t end = tick_end();
   result_sink += (uint64_t)(unsigned char)output[0] + length;
   return end - start;

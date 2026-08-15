@@ -1,17 +1,19 @@
 /*
- * Braid58: fixed-32-byte Bitcoin Base58 decoder.
+ * Braid58: fixed-32-byte Bitcoin Base58 AVX-512 decoder.
  *
  * This research kernel is deliberately narrow:
  *   - input is an explicit-length, canonical Bitcoin Base58 string;
  *   - the accepted encoded length is 32..44 bytes;
  *   - successful inputs decode to exactly one 32-byte big-endian value;
- *   - AVX-512 F/DQ/BW/VL/IFMA/VBMI/VBMI2 is required.
+ *   - AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI/VBMI2 are required.
  *
  * The 44 input digits are right-aligned in a 48-digit field and folded into
  * eight radix-(58^6) cells.  An IFMA matrix then maps those cells into five
  * radix-(2^52) limbs.  Overflow and Bitcoin's leading-'1' canonicality rule
  * are checked before the caller's output is touched.
  */
+
+#include "braid58_internal.h"
 
 #include <immintrin.h>
 #include <stddef.h>
@@ -20,7 +22,7 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #define BRAID58_TARGET                                                        \
-  __attribute__((target("avx512f,avx512dq,avx512bw,avx512vl,avx512ifma,"    \
+  __attribute__((target("avx2,avx512f,avx512dq,avx512bw,avx512vl,avx512ifma," \
                         "avx512vbmi,avx512vbmi2")))
 #else
 #define BRAID58_TARGET
@@ -107,7 +109,7 @@ braid58_store_be64(uint8_t *dst, uint64_t value) {
  * input.  On failure, out[0..31] is left unchanged.
  */
 BRAID58_TARGET int
-braid58_decode_32(const char *input, size_t input_len, uint8_t out[32]) {
+braid58_decode_32_avx512(const char *input, size_t input_len, uint8_t out[32]) {
   uint64_t low_scalar[8];
   uint64_t high_scalar[8];
   uint64_t limb[8];
@@ -216,189 +218,3 @@ braid58_decode_32(const char *input, size_t input_len, uint8_t out[32]) {
   memcpy(out, decoded, sizeof(decoded));
   return 1;
 }
-
-/* Compatibility spelling retained for the original radix-6 benchmark. */
-int
-radix6_decode_32(const char *input, size_t input_len, uint8_t out[32]) {
-  return braid58_decode_32(input, input_len, out);
-}
-
-#ifdef BRAID58_TEST
-
-#include <stdio.h>
-#include <stdlib.h>
-
-static const char BRAID58_ALPHABET[] =
-    "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-
-static int
-braid58_scalar_digit(uint8_t ch) {
-  if (ch >= 128)
-    return -1;
-  const uint8_t value = ch < 64 ? BRAID58_INV_LO[ch]
-                                : BRAID58_INV_HI[ch - 64];
-  return value == UINT8_C(255) ? -1 : (int)value;
-}
-
-static int
-braid58_scalar_decode_32(const char *input, size_t input_len, uint8_t out[32]) {
-  uint8_t decoded[32] = {0};
-  size_t leading_ones = 0;
-
-  if (input == NULL || out == NULL || input_len < 32 || input_len > 44)
-    return 0;
-  while (leading_ones < input_len &&
-         (uint8_t)input[leading_ones] == (uint8_t)'1')
-    ++leading_ones;
-
-  for (size_t i = 0; i < input_len; ++i) {
-    const int digit = braid58_scalar_digit((uint8_t)input[i]);
-    unsigned carry;
-    if (digit < 0)
-      return 0;
-    carry = (unsigned)digit;
-    for (size_t j = 32; j-- > 0;) {
-      const unsigned value = (unsigned)decoded[j] * 58U + carry;
-      decoded[j] = (uint8_t)value;
-      carry = value >> 8;
-    }
-    if (carry != 0)
-      return 0;
-  }
-
-  size_t leading_zero_bytes = 0;
-  while (leading_zero_bytes < 32 && decoded[leading_zero_bytes] == 0)
-    ++leading_zero_bytes;
-  if (leading_ones != leading_zero_bytes)
-    return 0;
-  memcpy(out, decoded, 32);
-  return 1;
-}
-
-static size_t
-braid58_scalar_encode_32(const uint8_t input[32], char out[45]) {
-  uint8_t work[32];
-  char reverse[45];
-  size_t zero_count = 0;
-  size_t start;
-  size_t digit_count = 0;
-
-  memcpy(work, input, sizeof(work));
-  while (zero_count < 32 && work[zero_count] == 0)
-    ++zero_count;
-  start = zero_count;
-
-  while (start < 32) {
-    unsigned remainder = 0;
-    for (size_t i = start; i < 32; ++i) {
-      const unsigned value = remainder * 256U + (unsigned)work[i];
-      work[i] = (uint8_t)(value / 58U);
-      remainder = value % 58U;
-    }
-    reverse[digit_count++] = BRAID58_ALPHABET[remainder];
-    while (start < 32 && work[start] == 0)
-      ++start;
-  }
-
-  for (size_t i = 0; i < zero_count; ++i)
-    out[i] = '1';
-  for (size_t i = 0; i < digit_count; ++i)
-    out[zero_count + i] = reverse[digit_count - 1 - i];
-  out[zero_count + digit_count] = '\0';
-  return zero_count + digit_count;
-}
-
-static uint64_t
-braid58_rng(uint64_t *state) {
-  uint64_t x = *state;
-  x ^= x << 13;
-  x ^= x >> 7;
-  x ^= x << 17;
-  *state = x;
-  return x;
-}
-
-static void
-braid58_test_fail(const char *what, unsigned iteration) {
-  fprintf(stderr, "decode_r6 test failure: %s at iteration %u\n",
-          what, iteration);
-  exit(1);
-}
-
-int
-main(void) {
-  uint64_t rng = UINT64_C(0x243f6a8885a308d3);
-  uint8_t source[32];
-  uint8_t fast[32];
-  uint8_t reference[32];
-  char encoded[45];
-
-  /* Canonical round trips, including naturally varied leading-zero counts. */
-  for (unsigned iteration = 0; iteration < 200000; ++iteration) {
-    for (unsigned i = 0; i < 32; i += 8) {
-      const uint64_t value = braid58_rng(&rng);
-      memcpy(source + i, &value, sizeof(value));
-    }
-    if ((iteration & 31U) < 32U)
-      memset(source, 0, iteration & 31U);
-    const size_t len = braid58_scalar_encode_32(source, encoded);
-    if (len < 32 || len > 44)
-      braid58_test_fail("reference encoded length", iteration);
-    if (!braid58_decode_32(encoded, len, fast))
-      braid58_test_fail("valid input rejected", iteration);
-    if (memcmp(source, fast, 32) != 0)
-      braid58_test_fail("round-trip mismatch", iteration);
-    if (!braid58_scalar_decode_32(encoded, len, reference) ||
-        memcmp(reference, fast, 32) != 0)
-      braid58_test_fail("reference mismatch", iteration);
-  }
-
-  /* Differential test arbitrary alphabet strings: overflow/noncanonical too. */
-  for (unsigned iteration = 0; iteration < 200000; ++iteration) {
-    const size_t len = 32U + (size_t)(braid58_rng(&rng) % 13U);
-    for (size_t i = 0; i < len; ++i)
-      encoded[i] = BRAID58_ALPHABET[braid58_rng(&rng) % 58U];
-    const int expected = braid58_scalar_decode_32(encoded, len, reference);
-    const int actual = braid58_decode_32(encoded, len, fast);
-    if (expected != actual)
-      braid58_test_fail("accept/reject differential", iteration);
-    if (actual && memcmp(reference, fast, 32) != 0)
-      braid58_test_fail("arbitrary-string differential", iteration);
-  }
-
-  /* Every nonalphabet byte must be rejected, including bytes >= 0x80. */
-  memset(source, UINT8_C(0xa5), sizeof(source));
-  const size_t valid_len = braid58_scalar_encode_32(source, encoded);
-  for (unsigned byte = 0; byte < 256; ++byte) {
-    if (braid58_scalar_digit((uint8_t)byte) >= 0)
-      continue;
-    char damaged[45];
-    memcpy(damaged, encoded, valid_len);
-    damaged[valid_len / 2] = (char)(uint8_t)byte;
-    if (braid58_decode_32(damaged, valid_len, fast))
-      braid58_test_fail("invalid alphabet byte accepted", byte);
-  }
-
-  /* Exact fixed-width and canonical-leading-zero edge cases. */
-  memset(encoded, '1', 32);
-  if (!braid58_decode_32(encoded, 32, fast))
-    braid58_test_fail("all-zero value rejected", 0);
-  memset(reference, 0, sizeof(reference));
-  if (memcmp(fast, reference, 32) != 0)
-    braid58_test_fail("all-zero value mismatch", 0);
-  memset(encoded, 'z', 44);
-  if (braid58_decode_32(encoded, 44, fast))
-    braid58_test_fail("overflow accepted", 0);
-  memset(encoded, '1', 32);
-  encoded[32] = '2';
-  if (braid58_decode_32(encoded, 33, fast))
-    braid58_test_fail("noncanonical leading one accepted", 0);
-  if (braid58_decode_32(encoded, 31, fast) ||
-      braid58_decode_32(encoded, 45, fast))
-    braid58_test_fail("invalid length accepted", 0);
-
-  puts("decode_r6: all differential and edge-case tests passed");
-  return 0;
-}
-
-#endif /* BRAID58_TEST */

@@ -1,34 +1,28 @@
-CC ?= gcc
-CFLAGS ?= -O3 -march=native -Wall -Wextra -Werror
+BUILD_DIR ?= build/cmake
+BUILD_TYPE ?= Release
+CMAKE_ARGS ?=
 
-.PHONY: all test bench objects clean
+.PHONY: all configure test rust-test bench install clean
 
-all: libbraid58.a
+all: configure
+	cmake --build "$(BUILD_DIR)" --parallel
 
-objects: encode_r6.o decode_r6.o
+configure:
+	cmake -S . -B "$(BUILD_DIR)" \
+		-DCMAKE_BUILD_TYPE="$(BUILD_TYPE)" -DBUILD_TESTING=ON $(CMAKE_ARGS)
 
-libbraid58.a: encode_r6.o decode_r6.o
-	$(AR) rcs $@ $^
+test: all
+	ctest --test-dir "$(BUILD_DIR)" --output-on-failure
 
-encode_r6.o: src/encode_r6.c include/braid58.h
-	$(CC) $(CFLAGS) -DBRAID58_NO_MAIN -c $< -o $@
-
-decode_r6.o: src/decode_r6.c include/braid58.h
-	$(CC) $(CFLAGS) -c $< -o $@
-
-encode_r6_test: src/encode_r6.c
-	$(CC) $(CFLAGS) $< -o $@
-
-decode_r6_test: src/decode_r6.c
-	$(CC) $(CFLAGS) -DBRAID58_TEST $< -o $@
-
-test: encode_r6_test decode_r6_test
-	./encode_r6_test
-	./decode_r6_test
+rust-test:
+	cargo test
+	cargo test --features force-scalar
 
 bench:
 	./bench/run.sh
 
+install: all
+	cmake --install "$(BUILD_DIR)"
+
 clean:
-	rm -f libbraid58.a encode_r6.o decode_r6.o encode_r6_test decode_r6_test
-	rm -rf build
+	cmake -E remove_directory "$(BUILD_DIR)"

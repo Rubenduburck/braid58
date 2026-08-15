@@ -1,87 +1,112 @@
 # Braid58
 
-**Parallel radix lifting for fixed-width Base58.**
+Fast, fixed-width Bitcoin Base58 for 32-byte values.
 
-Braid58 is an independent research prototype for encoding and decoding exactly
-32 bytes with the Bitcoin Base58 alphabet.  Its internal radix is
+Braid58 provides a small C ABI and an allocation-free Rust API. It selects an
+AVX-512 radix-conversion kernel at runtime on supported x86-64 CPUs and falls
+back to a portable scalar implementation everywhere else. Encoding preserves
+Bitcoin's leading-zero rule; decoding accepts only canonical values that
+produce exactly 32 bytes.
 
-```text
-B = 58^6 = 2^6 * 29^6 = 38,068,692,544.
+## Rust
+
+The crate is `no_std` and has no runtime Rust dependencies.
+
+```rust
+let bytes = [42_u8; 32];
+let encoded = braid58::encode_32(&bytes);
+
+assert_eq!(braid58::decode_32(encoded.as_str())?, bytes);
+println!("{encoded}");
+# Ok::<(), braid58::DecodeError>(())
 ```
 
-The encoder converts ten radix-`2^26` chunks into eight radix-`B` columns held
-in one ZMM register.  The decoder reverses the construction, mapping eight
-radix-`B` cells to five radix-`2^52` limbs.  See [DESIGN.md](DESIGN.md) for the
-derivation, bounds, validation coverage, and benchmark caveats.
-
-## Contents
-
-- `src/encode_r6.c` — encoder, Bitcoin leading-zero semantics, compatibility
-  wrapper, and embedded correctness tests.
-- `src/decode_r6.c` — strict decoder for canonical 32–44-character encodings
-  whose decoded width is exactly 32 bytes.
-- `include/braid58.h` — public prototype declarations and output capacity.
-- `Makefile` — static-library and self-test targets.
-- `DESIGN.md` — algorithm and experimental record.
-- `BENCHMARKS.md` — reproducible same-host Firedancer comparison and results.
-- `bench/` — validation and invariant-TSC benchmark harness.
-
-## Public prototype APIs
-
-```c
-#include "braid58.h"
-
-/* Writes 32..44 characters followed by NUL; returns length excluding NUL. */
-size_t braid58_encode_32(const uint8_t in[32], char out[45]);
-
-/* Firedancer-compatible wrapper; opt_len may be NULL and the return is out. */
-char *fd_base58_encode_32(const void *in, unsigned long *opt_len, char out[45]);
-
-/* Returns 1 on success, 0 on failure; failure leaves out unchanged. */
-int braid58_decode_32(const char *in, size_t len, uint8_t out[32]);
-```
-
-The C sources retain a few historical `radix6_*` compatibility symbols for the
-development harnesses; they are intentionally absent from the public header.
-The declared API is still a prototype rather than a stable ABI.
-
-## Build and verify
-
-The encoder requires AVX2 and AVX-512 F, DQ, BW, VL, IFMA and VBMI.  The
-decoder additionally requires VBMI2.  Build only on a machine where
-`-march=native` enables those features.
+`Encoded32` implements `Display`, `Deref<Target = str>`, `AsRef<str>`, and
+`AsRef<[u8]>`. `decode_32` accepts either text or bytes, while
+`decode_32_into` reuses a caller-provided output buffer and leaves it unchanged
+on failure. `backend()` reports the selected implementation.
 
 ```sh
-make test                  # build and run both embedded test programs
-make                       # build libbraid58.a
-make bench                 # compare with Turbo, five8, and Firedancer
+cargo test
+cargo test --features force-scalar
 ```
 
-These run the embedded differential, leading-zero, API-contract, and rejection
-tests.  The Makefile compiles the library encoder with `-DBRAID58_NO_MAIN`.
-Equivalent explicit compiler commands are in `DESIGN.md`.
+The crate currently has `publish = false` because the imported prototype did
+not include a project license. Choose a license before publishing it.
 
-The benchmark target fetches the pinned official Firedancer source and exact
-Base58 Turbo and five8 crates on its first run, builds all implementations for
-the native CPU, validates their results, pins execution to one logical CPU,
-and reports repeated invariant-TSC ticks, calls per second, and GiB/s.  Set
-`FIREDANCER_DIR` to use an existing checkout, or tune a run with `BENCH_CPU`,
-`BENCH_ITERATIONS`, and `BENCH_TRIALS`.  Braid58 only implements the fixed-32
-APIs; the fixed-64 results are standalone baselines rather than direct
-comparisons.
+## C
+
+```c
+#include <braid58.h>
+
+uint8_t input[BRAID58_BINARY_32_SIZE] = {0};
+uint8_t decoded[BRAID58_BINARY_32_SIZE];
+char encoded[BRAID58_ENCODED_32_CAPACITY];
+
+size_t length = braid58_encode_32(input, encoded);
+if (!braid58_decode_32(encoded, length, decoded)) {
+  /* invalid, overflowing, or noncanonical input */
+}
+```
+
+Build and install a static library by default, or set `BUILD_SHARED_LIBS=ON`:
+
+```sh
+cmake -S . -B build/cmake -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cmake
+ctest --test-dir build/cmake
+cmake --install build/cmake --prefix /usr/local
+```
+
+Installed consumers can use either CMake or pkg-config:
+
+```cmake
+find_package(braid58 0.1 CONFIG REQUIRED)
+target_link_libraries(my_target PRIVATE braid58::braid58)
+```
+
+```sh
+cc app.c $(pkg-config --cflags --libs braid58)
+```
+
+The installed ABI exports only:
+
+- `braid58_encode_32`
+- `braid58_decode_32`
+- `braid58_get_backend`
+
+## CPU backends
+
+The optimized backend requires AVX2 and AVX-512 F, DQ, BW, VL, IFMA, VBMI,
+and VBMI2. The public API checks these features before dispatching, so binaries
+remain safe on unsupported CPUs. Disable the optimized backend with
+`-DBRAID58_ENABLE_AVX512=OFF` in CMake or the Rust `force-scalar` feature.
+
+GNU-compatible and Clang-compatible compilers build the AVX-512 backend on
+x86-64. Other compilers and architectures build the scalar backend only.
+
+## Development
+
+```sh
+make test        # CMake build plus the C differential suite
+make rust-test   # Rust unit tests and doctests
+make bench       # Braid58, Base58 Turbo, five8, and Firedancer
+```
+
+The C suite covers two million encoder differentials, 200,000 arbitrary
+decoder differentials, leading-zero cases, invalid bytes, overflow,
+canonicality, failure atomicity, and both runtime backends. The Rust tests
+exercise the safe wrapper and forced-scalar build.
+
+On the recorded Threadripper PRO 9995WX run, the runtime-dispatched public C
+API reached 2.142 GiB/s for 32-byte encoding and 3.357 GiB/s for 44-character
+decoding. These are hot-cache throughput results, not universal latency claims.
+See [BENCHMARKS.md](BENCHMARKS.md) for the complete same-host comparison and
+[DESIGN.md](DESIGN.md) for the radix construction.
 
 ## Scope
 
-- Fixed 32-byte input/output only.
-- Bitcoin alphabet only.
-- No run-time CPU dispatch and no portable fallback.
-- Research code: not hardened, audited, or promised constant-time.
-- The reported benchmarks are hot-cache results from one AVX-512 host, not
-  universal performance claims.
-
-The design was derived independently.  Base58 Turbo was the historical
-comparison target, not a source for this implementation.  The original
-historical comparison harness was absent from the archive; `bench/` is the new
-reproducible replacement.  Standard ingredients such as matrix radix
-conversion, reciprocal division by constants, and carry lookahead are
-established techniques; no claim of general algorithmic novelty is made.
+- Exactly 32 decoded bytes and the Bitcoin alphabet.
+- No allocation in either public API.
+- Decoder failure leaves the output untouched.
+- Research implementation: not audited and not promised constant-time.

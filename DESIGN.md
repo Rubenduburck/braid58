@@ -8,8 +8,9 @@ rule: every leading zero input byte becomes a leading `1`, including the
 all-zero input.  The decoder accepts only canonical encodings that represent
 exactly 32 output bytes.
 
-The specialization is deliberate.  Variable-width input, selectable alphabets,
-portable dispatch, and non-AVX-512 fallbacks are outside this prototype.
+The specialization is deliberate. Variable-width input and selectable
+alphabets remain out of scope. The packaged public API adds runtime dispatch
+and a scalar fallback around the specialized kernels.
 
 ## 2. Why direct base 29 was not the reduction
 
@@ -116,60 +117,43 @@ bytes, and unsupported lengths.
 
 ## 4. Instruction-set and implementation scope
 
-The encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI.  The decoder
-additionally uses VBMI2.  There is no feature check inside the prototype:
-executing it on a CPU without the required extensions is invalid.  There is
-also no portable scalar fallback, alternate alphabet, variable-width path,
-stable ABI, or security audit.
+The encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. The decoder additionally
+uses VBMI2. These kernels are private target-attributed functions. The public
+API checks the complete feature set and otherwise calls the scalar backend, so
+the installed library is safe to run on unsupported CPUs.
 
-The kernels are intended to demonstrate the radix schedule.  A production
-library still needs CPU dispatch, fallback implementations, supported-compiler
-testing, a documented overlap policy, and application-level fuzzing.
+The CMake build enables the optimized backend on x86-64 with GCC-compatible or
+Clang-compatible compilers. Other configurations build scalar-only. The C ABI
+documents non-overlapping buffers and failure behavior; the Rust wrapper makes
+the common operations safe and allocation-free. Neither backend has received a
+security audit or application-level fuzzing.
 
 ## 5. Correctness work completed
 
 The bundled self-tests cover:
 
-- Encoder differential tests against straightforward repeated division:
-  1,000,000 MSB-nonzero cases and 1,000,000 unrestricted cases with rotating
-  forced zero prefixes, plus all-zero, integer one, maximum value, and one
-  deliberate case for every leading-zero prefix.  The executable reports
-  2,000,036 differential/API cases.
-- Every possible leading-zero prefix, the all-zero vector, output boundaries,
-  and the compatibility wrapper's terminator, optional length, and return
-  pointer.
-- Decoder differentials for 200,000 valid round trips (cycling through leading
-  zero runs) and 200,000 arbitrary 32–44-character alphabet strings, including
-  their accept/reject outcome.
+- Encoder differentials for 1,000,000 MSB-nonzero and 1,000,000 unrestricted
+  values, plus all-zero, integer one, maximum value, and every leading-zero
+  prefix. Public, scalar, and AVX-512 results are compared when available.
+- Decoder round trips for the encoder corpus and 200,000 arbitrary
+  32–44-character alphabet strings, including accept/reject differentials
+  between the scalar and AVX-512 implementations.
 - All 198 byte values outside the 58-character Bitcoin alphabet.
-- Overflow, length, decoded-width, and canonicality rejection cases.
+- Overflow, length, decoded-width, canonicality, NULL handling, known vectors,
+  and the guarantee that failed decoding leaves output unchanged.
+- Native and forced-scalar C and Rust builds.
 
 These tests are meaningful evidence for the tested code, not a substitute for
 continuous fuzzing or an independent audit.
 
 ## 6. Current benchmark record
 
-The current rebuilt kernels were measured in hot-cache microbenchmarks on an
-AMD EPYC 9V74, with work pinned to a core and native-target optimized builds.
-The unit is an invariant-TSC tick; it is not necessarily a core cycle or a
-nanosecond.  Base58 Turbo 0.3.0's direct fixed-32 kernels are retained as the
-same-host comparison ranges recorded during development.
-
-| Fixed-32 operation | Current Braid58 | Turbo direct | Range-relative reduction |
-|---|---:|---:|---:|
-| Encode, complete public path | 71.7–73.0 | 80.58–81.41 | 9–12% |
-| Decode, common 44-character input | 60.26–61.45 | 73.10–75.80 | 16–20% |
-
-These numbers describe this machine, compiler configuration, benchmark corpus,
-and cache state only.  They do not establish a universal ordering.  In
-particular, CPUs with different AVX-512 implementations, frequency behavior,
-or no AVX-512 support can produce a very different result.  End-to-end
-application measurements should decide deployment.  The decoder row is the
-current rebuilt kernel; the Turbo range is the same-host historical comparator
-and should be remeasured alongside it before making a deployment decision.
-Occasional decoder samples around 62–63 ticks were attributed to system noise;
-the table gives the stable pinned-run range.  No current varied-length decoder
-measurement is claimed.
+[BENCHMARKS.md](BENCHMARKS.md) records the reproducible same-host comparison
+against pinned Base58 Turbo, five8, and Firedancer versions. It measures the
+runtime-dispatched public API, validates shared inputs before timing, and
+reports medians across repeated trials. The results remain specific to the
+machine, compiler, corpus, and cache state; they do not establish a universal
+ordering.
 
 ## 7. Relationship to other work
 
@@ -189,31 +173,12 @@ novelty, or freedom-to-operate conclusion.
 
 ## 8. Reproducing the local build
 
-Run the embedded encoder verification:
-
 ```sh
-gcc -O3 -march=native -fno-stack-protector \
-  -Wall -Wextra -Werror src/encode_r6.c -o encode_r6_test
-./encode_r6_test
-
-gcc -O3 -march=native -DBRAID58_TEST \
-  -Wall -Wextra -Werror src/decode_r6.c -o decode_r6_test
-./decode_r6_test
+make test
+make rust-test
+make bench
 ```
 
-Compile objects for integration with a harness:
-
-```sh
-gcc -O3 -march=native -fno-stack-protector -DBRAID58_NO_MAIN \
-  -Wall -Wextra -Werror -c src/encode_r6.c -o encode_r6.o
-gcc -O3 -march=native \
-  -Wall -Wextra -Werror -c src/decode_r6.c -o decode_r6.o
-ar rcs libbraid58.a encode_r6.o decode_r6.o
-```
-
-The historical Base58 Turbo comparison harness is not included in this bundle.
-To reproduce the table rather than merely test Braid58, construct an equivalent
-fixed-input benchmark against Base58 Turbo 0.3.0, link `libbraid58.a`, use a
-native release build, pin execution to a chosen core, and report repeated run
-ranges rather than a single best sample.  Treat the recorded Turbo range as
-context until both implementations are rebuilt and measured in the same run.
+The first command builds the C library and differential suite through CMake.
+The second tests the safe Rust API. The benchmark builds the public Braid58 C
+API alongside exact pinned competitors and pins the run to one logical CPU.
