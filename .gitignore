@@ -1,0 +1,5 @@
+/build/
+/Braid58-AVX512-prototype.zip
+*.a
+*.o
+*_test
