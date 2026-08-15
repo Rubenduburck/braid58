@@ -24,7 +24,7 @@ endif()
 
 set(BRAID58_SOURCES c/braid58.c)
 if(BRAID58_HAVE_AVX2_KERNEL)
-  list(APPEND BRAID58_SOURCES c/avx2.c)
+  list(APPEND BRAID58_SOURCES c/encode_avx2.c c/decode_avx2.c)
 endif()
 if(BRAID58_HAVE_AVX512_KERNEL)
   list(APPEND BRAID58_SOURCES c/encode_avx512.c c/decode_avx512.c)

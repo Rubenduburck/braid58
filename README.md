@@ -108,9 +108,11 @@ See [BENCHMARKS.md](BENCHMARKS.md) for the complete same-host comparison and
 [DESIGN.md](DESIGN.md) for the radix construction.
 
 With Braid58 capped at AVX2 on the same CPU, the dedicated backend reached
-0.808 GiB/s encoding and 1.454 GiB/s decoding. It did not preserve the
-overall AVX-512 lead: its decoder beat Firedancer, but Turbo and five8 remained
-faster. The exact AVX2-capped results are recorded in `BENCHMARKS.md`.
+1.342 GiB/s encoding and 1.444 GiB/s decoding. Its encoder beat five8 and
+Firedancer in the same public-API harness and was within 2.7% of Base58 Turbo;
+its decoder beat Firedancer but remained behind Turbo and five8. Native
+AVX-512 was still faster. The exact AVX2-capped results are recorded in
+`BENCHMARKS.md`.
 
 ## Scope
 

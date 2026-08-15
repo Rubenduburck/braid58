@@ -77,9 +77,16 @@ if (( braid_avx2 )); then
     -DBRAID58_HAVE_AVX2_KERNEL=1 \
     -DBRAID58_HAVE_AVX512_KERNEL="${braid_avx512}" \
     -I"${repo_dir}/include" -I"${repo_dir}/c" \
-    -c "${repo_dir}/c/avx2.c" \
-    -o "${build_dir}/braid58_avx2.o"
-  braid_objects+=("${build_dir}/braid58_avx2.o")
+    -c "${repo_dir}/c/encode_avx2.c" \
+    -o "${build_dir}/braid58_encode_avx2.o"
+  "${compiler}" "${portable_flags[@]}" -mtune=native \
+    -DBRAID58_HAVE_AVX2_KERNEL=1 \
+    -DBRAID58_HAVE_AVX512_KERNEL="${braid_avx512}" \
+    -I"${repo_dir}/include" -I"${repo_dir}/c" \
+    -c "${repo_dir}/c/decode_avx2.c" \
+    -o "${build_dir}/braid58_decode_avx2.o"
+  braid_objects+=("${build_dir}/braid58_encode_avx2.o"
+                   "${build_dir}/braid58_decode_avx2.o")
 fi
 if (( braid_avx512 )); then
   "${compiler}" "${portable_flags[@]}" -mtune=native \

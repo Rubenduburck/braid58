@@ -2,8 +2,8 @@
 
 ## 1. Goal and contract
 
-Braid58 explores a specialized AVX-512 circuit for the Bitcoin Base58 encoding
-of one 256-bit value.  The complete encoder preserves Bitcoin's leading-zero
+Braid58 explores specialized SIMD circuits for the Bitcoin Base58 encoding of
+one 256-bit value. The complete encoder preserves Bitcoin's leading-zero
 rule: every leading zero input byte becomes a leading `1`, including the
 all-zero input.  The decoder accepts only canonical encodings that represent
 exactly 32 output bytes.
@@ -115,15 +115,34 @@ decoder also verifies the relationship between leading `1` characters and
 leading zero bytes, rejecting noncanonical width, overflow, invalid alphabet
 bytes, and unsupported lengths.
 
+### 3.3 AVX2 retuning
+
+AVX2 has four 64-bit lanes per YMM register but no packed 64-bit integer
+multiply. Keeping radix `58^6` in the encoder therefore makes each 26-by-36-bit
+matrix product require two 32-bit multiplies. The AVX2 encoder instead uses
+
+```text
+ten radix-2^26 chunks  ->  nine radix-58^5 cells,
+58^5 = 656,356,768 < 2^30.
+```
+
+Every source cell and matrix coefficient then fits the low 32 bits consumed by
+`vpmuludq`, which produces four exact 64-bit products per instruction. The
+columns use reciprocal div/rem followed by the same carry-lookahead idea as the
+AVX-512 circuit. Five-symbol cells are split and mapped with AVX2 shuffle
+networks. The AVX2 decoder independently keeps eight radix-`58^6` cells,
+vectorizes alphabet classification and grouping, and uses a width-aware
+256-bit Horner conversion; that decoder schedule is faster on the recorded
+Threadripper than the prototype's inverse radix-`58^5` matrix.
+
 ## 4. Instruction-set and implementation scope
 
 The fastest encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. Its decoder
-additionally uses VBMI2. A separate AVX2 backend retains the radix-`58^6`
-matrix but splits its eight 64-bit cells across two YMM vectors. Its decoder
-uses vector classification and digit grouping followed by a width-aware
-256-bit Horner conversion. These kernels are private target-attributed
-functions. The public API checks the complete feature set, prefers AVX-512,
-then AVX2, and otherwise calls the scalar backend.
+additionally uses VBMI2. The separate AVX2 encoder uses the radix-`58^5`
+retuning above, while its decoder uses vector classification and digit grouping
+followed by a width-aware 256-bit Horner conversion. These kernels are private
+target-attributed functions. The public API checks the complete feature set,
+prefers AVX-512, then AVX2, and otherwise calls the scalar backend.
 
 The CMake build enables both vector backends on x86-64 with GCC-compatible or
 Clang-compatible compilers. Other configurations build scalar-only. The C ABI
@@ -166,8 +185,9 @@ template.  Its encoder converts input bytes into 22 radix-`58^2` 16-bit limbs
 with an AVX2 `vpmaddwd` schedule and repeated carry rounds.  Braid58 instead
 converts ten radix-`2^26` chunks into eight radix-`58^6` 64-bit lanes, performs
 parallel reciprocal normalization, and resolves the residual carry dependency
-as a small prefix problem.  The schedules and internal representations are
-different.
+as a small prefix problem. Its AVX2 retuning uses nine radix-`58^5` cells so
+the analogous matrix fits native `vpmuludq`. The schedules and internal
+representations are different.
 
 Matrix radix conversion, close-radix decompositions, fixed-divisor reciprocal
 division, and carry-lookahead scans are all established ideas.  This particular
