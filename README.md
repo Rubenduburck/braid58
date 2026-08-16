@@ -12,6 +12,18 @@ Measured with [Base58 Turbo](https://github.com/hacer-bark/base58-turbo)'s bench
 Each Braid58 backend and Turbo are measured in the same executable with identical inputs.
 Outputs are verified before timing.
 
+### Scalar
+
+Turbo's `unsafe-simd` feature is disabled for this comparison. Both portable
+paths target the x86-64 ISA baseline.
+
+| Operation | Braid58 scalar | Base58 Turbo scalar |
+|---|---:|---:|
+| Encode32 | 1.260 GiB/s | 1.292 GiB/s |
+| Decode32 | 1.914 GiB/s | 1.812 GiB/s |
+| Encode64 | 0.860 GiB/s | 0.763 GiB/s |
+| Decode64 | 1.748 GiB/s | 1.664 GiB/s |
+
 ### AVX2
 
 <img alt="Base58 Turbo Criterion benchmark with Braid58 AVX2 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-avx2-9995wx.png">
@@ -84,7 +96,7 @@ Exact commands and timing intervals are in [BENCHMARKS.md](BENCHMARKS.md).
 
 | Implementation | Input scope | Conversion | SIMD selection |
 |---|---|---|---|
-| Braid58 | Fixed 32/64 bytes | Precomputed `2^26 -> 58^5/58^6` encode matrices and `58^4 -> 2^32` decode matrices | Compile time |
+| Braid58 | Fixed 32/64 bytes | Precomputed encode matrices and fixed-limb decode schedules | Compile time |
 | Base58 Turbo | Variable length | Radix-`58^2` limbs with repeated normalization | Runtime |
 | Firedancer bs58 | Fixed 32/64 bytes | Firedancer-specific limb and conversion schedule | Build configuration |
 
@@ -194,6 +206,7 @@ Selected kernels:
 
 | Target | Encode32 | Decode32 | Encode64 | Decode64 |
 |---|---|---|---|---|
+| Scalar | B5 matrix | B10 limbs | B5 matrix | B10 limbs |
 | AVX2 | B5 single/x2/x3 | B4 | B5 single/x2/x3 | B4 |
 | 9995WX AVX-512 | ZMM B6 single/x2/x3 | mixed ZMM B4 | ZMM B5 single | mixed ZMM/YMM B4 |
 

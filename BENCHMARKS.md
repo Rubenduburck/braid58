@@ -14,6 +14,30 @@ Benchmark reproduction requires a full repository checkout.
 TSC ticks are not core cycles. GiB/s counts binary input bytes for encode and
 encoded input bytes for decode.
 
+## Scalar comparison
+
+Base58 Turbo was built without its default `unsafe-simd` feature. Both codec
+paths target the x86-64 ISA baseline; Braid58 is tuned for the benchmark host
+without enabling a higher ISA. The corpus and output validation are otherwise
+the same as the main benchmark.
+
+| Operation | Braid ticks | Turbo ticks | Braid GiB/s | Turbo GiB/s | Braid difference |
+|---|---:|---:|---:|---:|---:|
+| Encode32 | 59.13 | 57.65 | 1.260 | 1.292 | +2.6% |
+| Decode32 | 53.53 | 56.55 | 1.914 | 1.812 | -5.3% |
+| Encode64 | 173.35 | 195.32 | 0.860 | 0.763 | -11.2% |
+| Decode64 | 117.21 | 123.16 | 1.748 | 1.664 | -4.8% |
+
+Fifteen trials of one million calls were pinned to logical CPU 31. Run with:
+
+```sh
+BENCH_BRAID_TARGET=scalar \
+BENCH_TURBO_BACKEND=scalar \
+BENCH_TURBO_TARGET_CPU=x86-64 \
+BENCH_CPU=31 BENCH_ITERATIONS=1000000 BENCH_TRIALS=15 \
+  ./bench/run.sh
+```
+
 ## Base58 Turbo gate
 
 Comparator:

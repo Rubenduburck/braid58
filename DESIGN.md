@@ -15,8 +15,26 @@
 
 | Target | Encode32 | Decode32 | Encode64 | Decode64 |
 |---|---|---|---|---|
+| Scalar | B5 matrix | B10 limbs | B5 matrix | B10 limbs |
 | AVX2 | B5 | B4 | B5 | B4 |
 | Threadripper PRO 9995WX | ZMM B6 | mixed ZMM B4 | ZMM B5 | mixed ZMM/YMM B4 |
+
+## Scalar
+
+The scalar encoder uses a radix-`2^32` to radix-`58^5` matrix for inputs with
+up to 44 significant bytes and the AVX2 design's radix-`2^26` to radix-`58^5`
+schedule for wider values. It emits two digits per lookup. Full-width Encode32
+keeps a rectangular matrix loop because portable compilers vectorize that
+shape well; full-width Encode64 skips the zero triangle. Leading zero bytes
+select smaller fixed matrix shapes.
+
+The scalar decoder parses ten characters at a time with a balanced reduction
+tree, then performs multiply-add steps over fixed little-endian 64-bit limbs.
+Compilers with a native 128-bit integer use it for the product and carry. A
+portable 32-by-32-bit product decomposition preserves the same behavior on
+other C11 compilers. Leading `1` digits are removed before conversion, then
+the exact-width canonicality check accounts for them without rescanning the
+decoded byte array.
 
 ## Encode32
 

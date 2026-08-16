@@ -14,7 +14,21 @@ cargo_command=${CARGO:-cargo}
 cargo_home=${CARGO_HOME:-"${build_dir}/cargo-home"}
 braid_target=${BENCH_BRAID_TARGET:-native}
 turbo_target_cpu=${BENCH_TURBO_TARGET_CPU:-native}
+turbo_backend=${BENCH_TURBO_BACKEND:-simd}
 avx2_tune=${BENCH_AVX2_TUNE:-native}
+
+case "${turbo_backend}" in
+  simd)
+    turbo_features=(--features turbo-simd)
+    ;;
+  scalar)
+    turbo_features=(--no-default-features --features turbo-scalar)
+    ;;
+  *)
+    echo "BENCH_TURBO_BACKEND must be simd or scalar" >&2
+    exit 2
+    ;;
+esac
 
 mkdir -p "${build_dir}"
 
@@ -35,6 +49,7 @@ fi
 CARGO_HOME="${cargo_home}" \
   RUSTFLAGS="${RUSTFLAGS:-} -C target-cpu=${turbo_target_cpu}" \
   "${cargo_command}" build --release --locked \
+  "${turbo_features[@]}" \
   --manifest-path "${repo_dir}/bench/turbo_bridge/Cargo.toml" \
   --target-dir "${build_dir}/turbo-target"
 
@@ -211,6 +226,7 @@ echo "Compiler: $("${compiler}" --version | head -n 1)"
 echo "Rust: $(rustc --version)"
 echo "Firedancer: ${actual_commit}"
 echo "Base58 Turbo: ${BASE58_TURBO_VERSION} (crates.io)"
+echo "Base58 Turbo backend: ${turbo_backend}"
 echo "Base58 Turbo target CPU: ${turbo_target_cpu}"
 echo "five8: ${FIVE8_VERSION} (crates.io)"
 echo "Braid58 target: ${braid_resolved_target} (requested: ${braid_target})"

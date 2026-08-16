@@ -4,9 +4,14 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = ["turbo-simd"]
+turbo-simd = ["base58-turbo/std", "base58-turbo/unsafe-simd"]
+turbo-scalar = ["base58-turbo/std"]
+
 [lib]
 crate-type = ["staticlib"]
 
 [dependencies]
-base58-turbo = "=0.3.0"
+base58-turbo = { version = "=0.3.0", default-features = false }
 five8 = "=1.0.0"
