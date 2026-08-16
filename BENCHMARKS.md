@@ -88,6 +88,8 @@ uses its `unsafe-simd` AVX2 path under `-C target-cpu=native` and has no AVX-512
 kernel. Each Braid result below is paired with the Turbo result from the same
 executable. Both processes were pinned to logical CPU 31.
 
+The README combines both logs into one plot. The AVX2 log is supplied first, so it provides the single set of comparator bars; the AVX-512 log contributes the second Braid58 bar at 32 and 64 bytes. When multiple logs contain the same series, the patched plotter deliberately keeps the first measurement.
+
 > **ISA comparison:** The AVX-512 rows compare Braid58 AVX-512 with Base58
 > Turbo AVX2. The AVX2 rows measure both implementations at the same ISA
 > level.
@@ -103,9 +105,7 @@ executable. Both processes were pinned to logical CPU 31.
 | AVX-512 | Encode64 | 36.217 ns | 1.6458 GiB/s | 41.661 ns | 1.4307 GiB/s |
 | AVX-512 | Decode64 | 11.238 ns | 7.2930 GiB/s | 33.860 ns | 2.4205 GiB/s |
 
-The README charts retain Turbo's original 16/32/48/64/128-byte sweep and
-comparators. Braid58 appears only at 32 and 64 bytes. Encode throughput counts
-binary input bytes; decode throughput counts encoded Base58 bytes.
+The README chart retains Turbo's original 16/32/48/64/128-byte sweep and comparators. Braid58 appears twice at 32 and 64 bytes, once for each SIMD backend, while every comparator appears once. Encode throughput counts binary input bytes; decode throughput counts encoded Base58 bytes.
 
 ## Fixed x3 encoding
 
@@ -192,10 +192,6 @@ taskset -c 31 env \
   BENCH_TARGET=all cargo bench --bench encoding_bench \
   2>&1 | tee /tmp/braid58-turbo-criterion-avx2.txt
 
-python3 /tmp/base58-turbo/benches/scripts/plot_bench.py \
-  /tmp/braid58-turbo-criterion-avx2.txt --braid-backend avx2 \
-  --out "$BRAID58_DIR/bench/results/turbo-criterion-avx2-9995wx.png"
-
 cp /tmp/braid58-criterion-avx512/libbraid58.a \
   /tmp/base58-turbo/native/libbraid58.a
 
@@ -207,8 +203,10 @@ taskset -c 31 env \
   2>&1 | tee /tmp/braid58-turbo-criterion-avx512.txt
 
 python3 /tmp/base58-turbo/benches/scripts/plot_bench.py \
-  /tmp/braid58-turbo-criterion-avx512.txt --braid-backend avx512 \
-  --out "$BRAID58_DIR/bench/results/turbo-criterion-avx512-9995wx.png"
+  /tmp/braid58-turbo-criterion-avx2.txt \
+  /tmp/braid58-turbo-criterion-avx512.txt \
+  --braid-backend both \
+  --out "$BRAID58_DIR/bench/results/turbo-criterion-simd-9995wx.png"
 ```
 
 ## Braid58 throughput

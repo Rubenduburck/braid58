@@ -163,7 +163,7 @@ index 545485a..6a3f6a1 100755
          if should_run("bs58") {
              group.bench_with_input(
 diff --git a/benches/scripts/plot_bench.py b/benches/scripts/plot_bench.py
-index 3e20df7..eff70fc 100755
+index 3e20df7..d035987 100755
 --- a/benches/scripts/plot_bench.py
 +++ b/benches/scripts/plot_bench.py
 @@ -9,7 +9,7 @@ import plotly.graph_objects as go
@@ -183,7 +183,7 @@ index 3e20df7..eff70fc 100755
 +BRAID_BACKENDS = {
 +    "avx2": ["Braid58_AVX2"],
 +    "avx512": ["Braid58_AVX512"],
-+    "both": ["Braid58_AVX2", "Braid58_AVX512"],
++    "both": ["Braid58_AVX512", "Braid58_AVX2"],
 +}
 +COMPARATOR_ORDER = [
 +    "Turbo",
@@ -195,7 +195,7 @@ index 3e20df7..eff70fc 100755
 +]
  LIBRARY_LABEL = {
 +    "Braid58_AVX2": "Braid58 AVX2",
-+    "Braid58_AVX512": "Braid58 AVX-512",
++    "Braid58_AVX512": "Braid58 AVX-512*",
      "Turbo": "base58-turbo",
      "Turbo_XMR": "base58-turbo (XMR)",
      "bs58": "bs58",
@@ -219,7 +219,15 @@ index 3e20df7..eff70fc 100755
  }
  
  THEME = {
-@@ -78,8 +94,9 @@ def parse(text):
+@@ -73,13 +89,16 @@ def parse(text):
+         if m and pending:
+             phase, library, size = pending
+             value = float(m.group(1)) * UNIT_TO_MIB[m.group(2)]
+-            data[phase].setdefault(size, {})[library] = value
++            # When combining backend logs, keep comparator measurements from
++            # the first log and add only previously unseen backend series.
++            data[phase].setdefault(size, {}).setdefault(library, value)
+             pending = None
      return data
  
  
@@ -230,7 +238,7 @@ index 3e20df7..eff70fc 100755
  
      sizes = sorted({s for phase in data.values() for s in phase})
      size_labels = [f"{s} B" for s in sizes]
-@@ -91,14 +108,14 @@ def render(data, out_path):
+@@ -91,14 +110,14 @@ def render(data, out_path):
          vertical_spacing=0.16,
      )
  
@@ -249,7 +257,7 @@ index 3e20df7..eff70fc 100755
              start = xi - (len(present) * bar_w) / 2
              winner = max(present, key=lambda lib: data[phase][size][lib])
              for j, lib in enumerate(present):
-@@ -110,7 +127,7 @@ def render(data, out_path):
+@@ -110,7 +129,7 @@ def render(data, out_path):
          phase_max = max(v for s in series.values() for v in s["y"])
          _, y_top = nice_axis(phase_max)
  
@@ -258,7 +266,18 @@ index 3e20df7..eff70fc 100755
              s = series[lib]
              if not s["x"]:
                  continue
-@@ -189,6 +206,12 @@ def main():
+@@ -182,24 +201,33 @@ def render(data, out_path):
+ def main():
+     parser = argparse.ArgumentParser(description=__doc__)
+     parser.add_argument(
+-        "input", nargs="?", type=Path, help="raw `cargo bench` output (default: stdin)"
++        "inputs",
++        nargs="*",
++        type=Path,
++        help="raw `cargo bench` outputs in precedence order (default: stdin)",
+     )
+     parser.add_argument(
+         "--out",
          type=Path,
          default=Path(__file__).resolve().parent.parent / "results" / "throughput.png",
      )
@@ -270,8 +289,11 @@ index 3e20df7..eff70fc 100755
 +    )
      args = parser.parse_args()
  
-     text = args.input.read_text() if args.input else sys.stdin.read()
-@@ -197,9 +220,9 @@ def main():
+-    text = args.input.read_text() if args.input else sys.stdin.read()
+-    data = parse(text)
++    texts = [path.read_text() for path in args.inputs] if args.inputs else [sys.stdin.read()]
++    data = parse("\n".join(texts))
+     if not data["Encode"] and not data["Decode"]:
          sys.exit("No benchmark lines found in input.")
  
      args.out.parent.mkdir(parents=True, exist_ok=True)

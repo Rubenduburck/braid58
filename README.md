@@ -9,34 +9,12 @@ The independent `y_j` chains are evaluated in parallel, then joined by carry pro
 ## Base58 Turbo benchmark
 
 Measured with [Base58 Turbo](https://github.com/hacer-bark/base58-turbo)'s benchmark at `18c8f94eadfa5643dfd7e31b02250d3bf184fa68`.
-Each Braid58 backend and Turbo are measured in the same executable with identical inputs.
-Outputs are verified before timing.
+The two Braid58 backends use identical inputs in separate executables, verify their outputs against Turbo before timing, and are combined into one chart.
+Comparator bars come from the AVX2 executable, so every other library appears once while Braid58 has both AVX-512 and AVX2 bars.
 
-### AVX2
+<img alt="Base58 Turbo Criterion benchmark with Braid58 AVX-512 and AVX2 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-simd-9995wx.png">
 
-<img alt="Base58 Turbo Criterion benchmark with Braid58 AVX2 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-avx2-9995wx.png">
-
-| Operation | Braid58 AVX2 | Base58 Turbo AVX2 |
-|---|---:|---:|
-| Encode32 | 1.3361 GiB/s | 1.2448 GiB/s |
-| Decode32 | 3.6961 GiB/s | 2.3830 GiB/s |
-| Encode64 | 1.4365 GiB/s | 1.3604 GiB/s |
-| Decode64 | 2.9100 GiB/s | 2.2701 GiB/s |
-
-### AVX-512
-
-> **ISA comparison:** This table compares Braid58 AVX-512 with Base58 Turbo AVX2.
-> Base58 Turbo has no AVX-512 backend.
-> The AVX2 table measures both implementations at the same ISA level.
-
-<img alt="Base58 Turbo Criterion benchmark with Braid58 AVX-512 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-avx512-9995wx.png">
-
-| Operation | Braid58 AVX-512 | Base58 Turbo AVX2 |
-|---|---:|---:|
-| Encode32 | 2.7307 GiB/s | 1.3784 GiB/s |
-| Decode32 | 4.9969 GiB/s | 2.3406 GiB/s |
-| Encode64 | 1.6458 GiB/s | 1.4307 GiB/s |
-| Decode64 | 7.2930 GiB/s | 2.4205 GiB/s |
+<sub>* Braid58 AVX-512 is not an equal-ISA comparison with the AVX2 implementations; Base58 Turbo has no AVX-512 backend.</sub>
 
 <p align="center"><sub>
 AMD Ryzen Threadripper PRO 9995WX, CPU 31.
