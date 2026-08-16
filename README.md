@@ -1,5 +1,7 @@
 # Braid58
 
+[![Crates.io](https://img.shields.io/crates/v/braid58.svg)](https://crates.io/crates/braid58) [![Documentation](https://docs.rs/braid58/badge.svg)](https://docs.rs/braid58) [![License](https://img.shields.io/crates/l/braid58.svg)](#license)
+
 Bitcoin Base58 codec for fixed 32-byte and 64-byte values.
 
 The name comes from the radix-conversion schedule.
@@ -72,6 +74,10 @@ No Turbo or Firedancer algorithm source is used.
 ## Rust API
 
 The crate is `no_std` and has no runtime Rust dependencies.
+
+```sh
+cargo add braid58
+```
 
 ```rust
 let bytes = [42_u8; 32];
@@ -198,4 +204,7 @@ Benchmark data and the pinned Base58 Turbo gate are documented in [BENCHMARKS.md
 - SIMD builds do not check CPU features.
 - Execution is data-dependent and not constant-time.
 - The implementation has not received an independent security audit.
-- No project license is assigned; Cargo publishing is disabled.
+
+## License
+
+Licensed under the [MIT license](LICENSE).

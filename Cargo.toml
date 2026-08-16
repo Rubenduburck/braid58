@@ -1,15 +1,21 @@
 [package]
 name = "braid58"
 version = "0.1.0"
+authors = ["Ruben du Burck"]
 edition = "2024"
 rust-version = "1.85"
 description = "Fast fixed-width Bitcoin Base58 for 32- and 64-byte values"
+license = "MIT"
 readme = "README.md"
+repository = "https://github.com/Rubenduburck/braid58"
+homepage = "https://github.com/Rubenduburck/braid58"
+documentation = "https://docs.rs/braid58"
 keywords = ["base58", "encoding", "simd", "avx512"]
 categories = ["encoding", "no-std"]
 links = "braid58"
 include = [
     "/Cargo.toml",
+    "/LICENSE",
     "/build.rs",
     "/CMakeLists.txt",
     "/Makefile",
@@ -29,8 +35,6 @@ include = [
     "/src/lib.rs",
     "/tests/*.c",
 ]
-# Choose and add a project license before publishing.
-publish = false
 
 [lib]
 path = "src/lib.rs"

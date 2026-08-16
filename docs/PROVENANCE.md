@@ -37,4 +37,4 @@ deterministic benchmark inputs, and backend-specific plot selection to Turbo's
 benchmark files; it does not modify Turbo's library source. AVX2 and AVX-512
 are linked and measured in separate executables.
 
-No project license is assigned.
+The project is licensed under the MIT license.
