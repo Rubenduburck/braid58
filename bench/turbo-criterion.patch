@@ -1,0 +1,286 @@
+diff --git a/benches/encoding_bench.rs b/benches/encoding_bench.rs
+index 545485a..6a3f6a1 100755
+--- a/benches/encoding_bench.rs
++++ b/benches/encoding_bench.rs
+@@ -17,7 +17,7 @@ use criterion::{
+     AxisScale, BenchmarkId, Criterion, PlotConfiguration, Throughput, criterion_group,
+     criterion_main,
+ };
+-use rand::RngExt;
++use rand::{RngExt, SeedableRng, rngs::Xoshiro256PlusPlus};
+ use std::env;
+ use std::hint::black_box;
+ use std::time::Duration;
+@@ -33,12 +33,25 @@ use five8::{decode_32, decode_64, encode_32, encode_64};
+ // 5. base58_monero
+ use base58_monero::base58 as base58_xmr;
+ 
+-fn generate_random_data(size: usize) -> Vec<u8> {
++#[link(name = "braid58", kind = "static")]
++unsafe extern "C" {
++    fn braid58_encode_32(input: *const u8, output: *mut u8) -> usize;
++    fn braid58_encode_64(input: *const u8, output: *mut u8) -> usize;
++    fn braid58_decode_32(input: *const u8, length: usize, output: *mut u8) -> i32;
++    fn braid58_decode_64(input: *const u8, length: usize, output: *mut u8) -> i32;
++}
++
++fn generate_benchmark_data(size: usize) -> Vec<u8> {
+     let mut data = vec![0u8; size];
+-    rand::rng().fill(&mut data[..]);
++    let mut rng = Xoshiro256PlusPlus::seed_from_u64(0x4252_4149_4435_3800 ^ size as u64);
++    rng.fill(&mut data[..]);
++    // Keep fixed-width inputs out of the leading-zero special case.
++    data[0] |= 1;
+     data
+ }
+ 
++const BRAID58_BACKEND: &str = env!("BRAID58_BENCH_BACKEND");
++
+ /// Helper to check if a specific engine should be benchmarked based on ENV vars.
+ /// Usage: `BENCH_TARGET=turbo cargo bench` or `BENCH_TARGET=all cargo bench`
+ fn should_run(target_name: &str) -> bool {
+@@ -76,7 +89,7 @@ fn bench_comparison(c: &mut Criterion) {
+     //     alphabet so it can specialise, rather than being handed one opaquely.
+ 
+     for size in sizes.iter() {
+-        let input_data = generate_random_data(*size);
++        let input_data = generate_benchmark_data(*size);
+ 
+         // ======================================================================
+         // ENCODE
+@@ -101,6 +114,54 @@ fn bench_comparison(c: &mut Criterion) {
+             );
+         }
+ 
++        // Braid58 (zero-allocation, fixed-width 32/64-byte API)
++        if should_run("braid58") && *size == 32 {
++            let arr: [u8; 32] = input_data.as_slice().try_into().unwrap();
++            let mut expected = [0u8; 45];
++            let expected_len = BITCOIN.encode_into(&arr, &mut expected).unwrap();
++
++            let mut check = [0u8; 45];
++            let check_len = unsafe { braid58_encode_32(arr.as_ptr(), check.as_mut_ptr()) };
++            assert_eq!(check_len, expected_len);
++            assert_eq!(&check[..check_len], &expected[..expected_len]);
++            group.bench_with_input(
++                BenchmarkId::new(format!("Encode/Braid58_{BRAID58_BACKEND}"), size),
++                &arr,
++                |b, d| {
++                    let mut buf = [0u8; 45];
++                    b.iter(|| {
++                        let n = unsafe {
++                            braid58_encode_32(black_box(d.as_ptr()), black_box(buf.as_mut_ptr()))
++                        };
++                        black_box((n, &buf));
++                    });
++                },
++            );
++        }
++        if should_run("braid58") && *size == 64 {
++            let arr: [u8; 64] = input_data.as_slice().try_into().unwrap();
++            let mut expected = [0u8; 89];
++            let expected_len = BITCOIN.encode_into(&arr, &mut expected).unwrap();
++
++            let mut check = [0u8; 89];
++            let check_len = unsafe { braid58_encode_64(arr.as_ptr(), check.as_mut_ptr()) };
++            assert_eq!(check_len, expected_len);
++            assert_eq!(&check[..check_len], &expected[..expected_len]);
++            group.bench_with_input(
++                BenchmarkId::new(format!("Encode/Braid58_{BRAID58_BACKEND}"), size),
++                &arr,
++                |b, d| {
++                    let mut buf = [0u8; 89];
++                    b.iter(|| {
++                        let n = unsafe {
++                            braid58_encode_64(black_box(d.as_ptr()), black_box(buf.as_mut_ptr()))
++                        };
++                        black_box((n, &buf));
++                    });
++                },
++            );
++        }
++
+         // 2. bs58 (zero-allocation via `onto`, default Bitcoin alphabet)
+         if should_run("bs58") {
+             group.bench_with_input(
+@@ -196,6 +257,58 @@ fn bench_comparison(c: &mut Criterion) {
+             );
+         }
+ 
++        // Braid58 (zero-allocation, canonical fixed-width decode)
++        if should_run("braid58") && *size == 32 {
++            let expected: [u8; 32] = input_data.as_slice().try_into().unwrap();
++            group.bench_with_input(
++                BenchmarkId::new(format!("Decode/Braid58_{BRAID58_BACKEND}"), size),
++                encoded_str.as_bytes(),
++                |b, d| {
++                    let mut buf = [0u8; 32];
++                    assert_eq!(
++                        unsafe { braid58_decode_32(d.as_ptr(), d.len(), buf.as_mut_ptr()) },
++                        1
++                    );
++                    assert_eq!(buf, expected);
++                    b.iter(|| {
++                        let ok = unsafe {
++                            braid58_decode_32(
++                                black_box(d.as_ptr()),
++                                black_box(d.len()),
++                                black_box(buf.as_mut_ptr()),
++                            )
++                        };
++                        black_box((ok, &buf));
++                    });
++                },
++            );
++        }
++        if should_run("braid58") && *size == 64 {
++            let expected: [u8; 64] = input_data.as_slice().try_into().unwrap();
++            group.bench_with_input(
++                BenchmarkId::new(format!("Decode/Braid58_{BRAID58_BACKEND}"), size),
++                encoded_str.as_bytes(),
++                |b, d| {
++                    let mut buf = [0u8; 64];
++                    assert_eq!(
++                        unsafe { braid58_decode_64(d.as_ptr(), d.len(), buf.as_mut_ptr()) },
++                        1
++                    );
++                    assert_eq!(buf, expected);
++                    b.iter(|| {
++                        let ok = unsafe {
++                            braid58_decode_64(
++                                black_box(d.as_ptr()),
++                                black_box(d.len()),
++                                black_box(buf.as_mut_ptr()),
++                            )
++                        };
++                        black_box((ok, &buf));
++                    });
++                },
++            );
++        }
++
+         // 2. bs58 (zero-allocation via `onto`)
+         if should_run("bs58") {
+             group.bench_with_input(
+diff --git a/benches/scripts/plot_bench.py b/benches/scripts/plot_bench.py
+index 3e20df7..eff70fc 100755
+--- a/benches/scripts/plot_bench.py
++++ b/benches/scripts/plot_bench.py
+@@ -9,7 +9,7 @@ import plotly.graph_objects as go
+ from plotly.subplots import make_subplots
+ 
+ BENCH_RE = re.compile(
+-    r"[A-Za-z0-9_]+_Performances/(Encode|Decode)/([A-Za-z0-9_]+)/(\d+)"
++    r"[A-Za-z0-9_]+_Performances/(Encode|Decode)/(.+?)/(\d+)"
+ )
+ THRPT_RE = re.compile(
+     r"thrpt:\s*\[[\d.]+\s*[KMG]iB/s\s+([\d.]+)\s*([KMG]iB)/s\s+[\d.]+\s*[KMG]iB/s"
+@@ -17,22 +17,38 @@ THRPT_RE = re.compile(
+ 
+ UNIT_TO_MIB = {"KiB": 1 / 1024, "MiB": 1.0, "GiB": 1024.0}
+ 
+-LIBRARY_ORDER = ["Turbo", "bs58", "base58", "five8", "Turbo_XMR", "base58_monero"]
++BRAID_BACKENDS = {
++    "avx2": ["Braid58_AVX2"],
++    "avx512": ["Braid58_AVX512"],
++    "both": ["Braid58_AVX2", "Braid58_AVX512"],
++}
++COMPARATOR_ORDER = [
++    "Turbo",
++    "bs58",
++    "base58 (alloc)",
++    "five8",
++    "Turbo_XMR",
++    "base58_monero (alloc)",
++]
+ LIBRARY_LABEL = {
++    "Braid58_AVX2": "Braid58 AVX2",
++    "Braid58_AVX512": "Braid58 AVX-512",
+     "Turbo": "base58-turbo",
+     "Turbo_XMR": "base58-turbo (XMR)",
+     "bs58": "bs58",
+-    "base58": "base58",
++    "base58 (alloc)": "base58 (alloc)",
+     "five8": "five8",
+-    "base58_monero": "base58-monero",
++    "base58_monero (alloc)": "base58-monero (alloc)",
+ }
+ COLORS = {
++    "Braid58_AVX2": "#cc4c4c",
++    "Braid58_AVX512": "#8f2d56",
+     "Turbo": "#2a78d6",
+     "Turbo_XMR": "#1baf7a",
+     "bs58": "#eb6834",
+-    "base58": "#eda100",
++    "base58 (alloc)": "#eda100",
+     "five8": "#e87ba4",
+-    "base58_monero": "#4a3aa7",
++    "base58_monero (alloc)": "#4a3aa7",
+ }
+ 
+ THEME = {
+@@ -78,8 +94,9 @@ def parse(text):
+     return data
+ 
+ 
+-def render(data, out_path):
++def render(data, out_path, braid_backend):
+     theme = THEME
++    library_order = BRAID_BACKENDS[braid_backend] + COMPARATOR_ORDER
+ 
+     sizes = sorted({s for phase in data.values() for s in phase})
+     size_labels = [f"{s} B" for s in sizes]
+@@ -91,14 +108,14 @@ def render(data, out_path):
+         vertical_spacing=0.16,
+     )
+ 
+-    bar_w = 0.9 / len(LIBRARY_ORDER)
+-    half_max = len(LIBRARY_ORDER) * bar_w / 2
++    bar_w = 0.9 / len(library_order)
++    half_max = len(library_order) * bar_w / 2
+     x_pad = 0.03
+ 
+     for row, phase in enumerate(("Encode", "Decode"), start=1):
+-        series = {lib: {"x": [], "y": [], "text": []} for lib in LIBRARY_ORDER}
++        series = {lib: {"x": [], "y": [], "text": []} for lib in library_order}
+         for xi, size in enumerate(sizes):
+-            present = [lib for lib in LIBRARY_ORDER if lib in data[phase].get(size, {})]
++            present = [lib for lib in library_order if lib in data[phase].get(size, {})]
+             start = xi - (len(present) * bar_w) / 2
+             winner = max(present, key=lambda lib: data[phase][size][lib])
+             for j, lib in enumerate(present):
+@@ -110,7 +127,7 @@ def render(data, out_path):
+         phase_max = max(v for s in series.values() for v in s["y"])
+         _, y_top = nice_axis(phase_max)
+ 
+-        for lib in LIBRARY_ORDER:
++        for lib in library_order:
+             s = series[lib]
+             if not s["x"]:
+                 continue
+@@ -189,6 +206,12 @@ def main():
+         type=Path,
+         default=Path(__file__).resolve().parent.parent / "results" / "throughput.png",
+     )
++    parser.add_argument(
++        "--braid-backend",
++        choices=BRAID_BACKENDS,
++        default="both",
++        help="Braid58 backend to plot (default: both)",
++    )
+     args = parser.parse_args()
+ 
+     text = args.input.read_text() if args.input else sys.stdin.read()
+@@ -197,9 +220,9 @@ def main():
+         sys.exit("No benchmark lines found in input.")
+ 
+     args.out.parent.mkdir(parents=True, exist_ok=True)
+-    render(data, args.out)
++    render(data, args.out, args.braid_backend)
+     print(f"wrote {args.out}")
+ 
+ 
+ if __name__ == "__main__":
+-    main()
+\ No newline at end of file
++    main()

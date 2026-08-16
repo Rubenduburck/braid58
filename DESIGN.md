@@ -1,216 +1,86 @@
-# Braid58 design notes
+# Design
 
-## 1. Goal and contract
+## Interface constraints
 
-Braid58 explores specialized SIMD circuits for the Bitcoin Base58 encoding of
-one 256-bit value. The complete encoder preserves Bitcoin's leading-zero
-rule: every leading zero input byte becomes a leading `1`, including the
-all-zero input.  The decoder accepts only canonical encodings that represent
-exactly 32 output bytes.
+- Alphabet: Bitcoin Base58.
+- Binary widths: 32 and 64 bytes.
+- Byte order: big-endian.
+- Encoded form: canonical Bitcoin Base58; C output includes a trailing NUL.
+- Decode failure: output is not modified.
+- C input/output overlap: unsupported.
+- Timing: data-dependent.
+- Backend selection: compile time.
 
-The specialization is deliberate. Variable-width input and selectable
-alphabets remain out of scope. The packaged public API adds runtime dispatch
-and a scalar fallback around the specialized kernels.
+## Selected kernels
 
-## 2. Why direct base 29 was not the reduction
+| Target | Encode32 | Decode32 | Encode64 | Decode64 |
+|---|---|---|---|---|
+| AVX2 | B5 | B4 | B5 | B4 |
+| Threadripper PRO 9995WX | ZMM B6 | mixed ZMM B4 | ZMM B5 | mixed ZMM/YMM B4 |
 
-Because `58 = 2 * 29`, a radix-58 digit can be split into a base-29 digit and
-one side bit.  For a block of `k` digits, let
+## Encode32
 
-```text
-A = 29^k                 R = 58^k = 2^k A
-c_i = 2^k q_i + r_i      0 <= r_i < 2^k.
-```
+The AVX2 encoder rechunks the 256-bit input into ten radix-`2^26` values and
+applies a precomputed matrix to produce nine radix-`58^5` columns. Since
+`58^5 < 2^30`, `VPMULUDQ` computes each 26-by-30-bit product without product
+splitting. A parallel carry scan normalizes the columns before digit emission.
 
-Then division by `2^k` is local in radix `R`:
+The AVX-512 encoder uses the same ten input chunks and eight radix-`58^6`
+columns. Eight columns occupy one ZMM register. Constant-reciprocal division,
+integer quotient correction, and an eight-lane carry lookahead normalize the
+columns. VBMI performs digit ordering and alphabet lookup.
 
-```text
-X mod 2^k = r_0
-c'_i      = q_i + A r_(i+1),       with c'_i < R.
-```
+## Decode32
 
-This is a useful carry-free transducer, but it does not compress the complete
-conversion.  Forty-four base-29 digits contain about 213.75 bits and the side
-plane contains exactly another 44 bits.  Base 29 relocates those bits rather
-than eliminating their recovery cost.
+Both SIMD targets group the input into eleven radix-`58^4` cells with
+`VPMADDUBSW` and `VPMADDWD`, then apply a precomputed matrix to produce eight
+radix-`2^32` words.
 
-## 3. Chosen radix
+The AVX2 kernel uses YMM matrix rows. The AVX-512 kernel maps and folds the
+44-byte frame in a ZMM and selects ZMM, YMM, or scalar products by row density.
 
-The useful packing point is
+## Encode64
 
-```text
-B = 58^6 = 38,068,692,544 < 2^36.
-```
+The AVX2 encoder maps twenty radix-`2^26` chunks to radix-`58^5` columns.
 
-Six output symbols form one reasonably dense 36-bit cell, while eight such
-cells cover the maximum 44-symbol representation with four spare symbol slots.
-Eight cells also fit exactly in the eight 64-bit lanes of a ZMM register.
+The AVX-512 encoder produces seventeen raw radix-`58^5` columns and one top
+carry. The maximum raw column is below `2^59`. The matrix stage uses 29 ZMM
+`VPMULUDQ` products.
 
-### 3.1 Encoding matrix
+## Decode64
 
-Interpret the big-endian input as an unsigned integer and rechunk it as
+The AVX2 decoder folds 88 digits into twenty-two radix-`58^4` cells, applies a
+sparse inverse matrix, and emits sixteen radix-`2^32` words.
 
-```text
-X = sum(i=0..9) a_i 2^(26i),        0 <= a_i < 2^26.
-```
+The AVX-512 decoder uses two overlapping 64-byte loads, VBMI mapping,
+`VPMADDUBSW`/`VPMADDWD` folding, density-specific ZMM/YMM/scalar matrix rows,
+a sixteen-lane carry lookahead, and one final byte permutation/store.
 
-For every input position, precompute the radix-`B` expansion
+## Rejected kernels
 
-```text
-2^(26i) = sum(j=0..7) w_ij B^j.
-```
+The following measured slower than the selected kernels:
 
-The raw output columns are therefore
+- B6/IFMA decode;
+- B6 encode64 using `VPMULLQ`;
+- B6 encode64 using IFMA;
+- all-ZMM sparse matrices;
+- B8/BMI2 decode;
+- P27 and P29 encode layouts;
+- serial carry propagation;
+- alternate carry-prefix schedules;
+- alternate parser schedules;
+- YMM alias bodies on the AVX-512 target.
 
-```text
-c_j = sum(i=0..9) a_i w_ij.
-```
+The object audit rejects `VPMULLQ`, IFMA, and VBMI instructions in the
+selected AVX-512 encode64 object and rejects IFMA and `VPDPBUSD` in the
+selected AVX-512 decode64 object.
 
-Rows 0 and 1 affect only the low column and are folded into its scalar seed;
-the remaining rows are accumulated with 64-bit vector products.  An exhaustive
-coefficient-bound calculation gives the largest possible raw column as
+## Batch scope
 
-```text
-11,454,759,584,224,480,191 = 0.6209638 * 2^64,
-```
+Encode32 has dedicated staged x2/x3 kernels on AVX2 and AVX-512. Encode64 has
+dedicated staged x2/x3 kernels on AVX2. The public scalar and AVX-512
+Encode64 batch entry points preserve the same API by calling the selected
+single encoder per lane; no dedicated AVX-512 Encode64 batch kernel is
+provided.
 
-so every raw lane fits in an unsigned 64-bit word with ample room for the
-subsequent bounded normalization carry.
-
-Each lane is divided by the constant `B` using a floating-point reciprocal
-estimate with an embedded round-to-nearest/no-exception mode.  Integer product
-and comparison masks correct the estimate to the exact quotient and remainder,
-independently of the caller's floating-point environment.  After each raw
-quotient is added to the next lane, a lane sum is below `B + 2^29` and emits at
-most one carry.  `sum >= B` generates a carry and `sum == B - 1` propagates an
-incoming carry.  An eight-bit, three-stage prefix scan resolves the complete
-chain without serial lane division.
-
-Finally, each normalized `B` cell is split as
-
-```text
-58^6 = (58^3)^2,
-58^3 = 58 * 58^2,
-58^2 = 58 * 58,
-```
-
-again using exact constant-reciprocal operations.  The resulting digit bytes
-are permuted and mapped through the fixed Bitcoin alphabet with VBMI byte
-permutation.  The complete wrapper removes numeric padding and applies the
-leading-zero-byte rule.
-
-### 3.2 Decoding matrix
-
-The decoder validates 32–44 input characters, classifies them through the
-Bitcoin inverse alphabet, and groups the digits into eight radix-`B` cells.
-It then applies the inverse fixed-radix transform:
-
-```text
-eight radix-58^6 cells  ->  five radix-2^52 limbs.
-```
-
-The weight matrix is accumulated with AVX-512 IFMA.  The limbs are normalized,
-checked against the 256-bit bound and serialized as 32 big-endian bytes.  The
-decoder also verifies the relationship between leading `1` characters and
-leading zero bytes, rejecting noncanonical width, overflow, invalid alphabet
-bytes, and unsupported lengths.
-
-### 3.3 AVX2 retuning
-
-AVX2 has four 64-bit lanes per YMM register but no packed 64-bit integer
-multiply. Keeping radix `58^6` in the encoder therefore makes each 26-by-36-bit
-matrix product require two 32-bit multiplies. The AVX2 encoder instead uses
-
-```text
-ten radix-2^26 chunks  ->  nine radix-58^5 cells,
-58^5 = 656,356,768 < 2^30.
-```
-
-Every source cell and matrix coefficient then fits the low 32 bits consumed by
-`vpmuludq`, which produces four exact 64-bit products per instruction. The
-columns use reciprocal div/rem followed by the same carry-lookahead idea as the
-AVX-512 circuit. Five-symbol cells are split and mapped with AVX2 shuffle
-networks. The AVX2 decoder independently keeps eight radix-`58^6` cells,
-vectorizes alphabet classification and grouping, and uses a width-aware
-256-bit Horner conversion; that decoder schedule is faster on the recorded
-Threadripper than the prototype's inverse radix-`58^5` matrix.
-
-The encoder's throughput path uses data-dependent branches to skip rare
-reciprocal and carry-propagation corrections. For the common `input[0] != 0`
-case, it also assembles digits entirely in registers and writes the fixed
-43- or 44-character result without a stack round trip. A general fallback
-preserves every leading-zero prefix. These branches improve ordinary public
-identifier workloads but mean the AVX2 encoder is not constant-time for secret
-inputs.
-
-## 4. Instruction-set and implementation scope
-
-The fastest encoder uses AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI. Its decoder
-additionally uses VBMI2. The separate AVX2 encoder uses the radix-`58^5`
-retuning above, while its decoder uses vector classification and digit grouping
-followed by a width-aware 256-bit Horner conversion. These kernels are private
-target-attributed functions. The public API checks the complete feature set,
-prefers AVX-512, then AVX2, and otherwise calls the scalar backend.
-
-The CMake build enables both vector backends on x86-64 with GCC-compatible or
-Clang-compatible compilers. Other configurations build scalar-only. The C ABI
-documents non-overlapping buffers and failure behavior; the Rust wrapper makes
-the common operations safe and allocation-free. The implementations have not
-received a security audit or application-level fuzzing.
-
-## 5. Correctness work completed
-
-The bundled self-tests cover:
-
-- Encoder differentials for 1,000,000 MSB-nonzero and 1,000,000 unrestricted
-  values, plus all-zero, integer one, maximum value, and every leading-zero
-  prefix. Public, scalar, AVX2, and AVX-512 results are compared when available.
-- Decoder round trips for the encoder corpus and 200,000 arbitrary
-  32–44-character alphabet strings, including accept/reject differentials
-  between the scalar, AVX2, and AVX-512 implementations.
-- All 198 byte values outside the 58-character Bitcoin alphabet.
-- Overflow, length, decoded-width, canonicality, NULL handling, known vectors,
-  and the guarantee that failed decoding leaves output unchanged.
-- Native, AVX2-only, and forced-scalar C builds, plus native and forced-scalar
-  Rust builds.
-
-These tests are meaningful evidence for the tested code, not a substitute for
-continuous fuzzing or an independent audit.
-
-## 6. Current benchmark record
-
-[BENCHMARKS.md](BENCHMARKS.md) records the reproducible same-host comparison
-against pinned Base58 Turbo, five8, and Firedancer versions. It measures the
-runtime-dispatched public API, validates shared inputs before timing, and
-reports medians across repeated trials. The results remain specific to the
-machine, compiler, corpus, and cache state; they do not establish a universal
-ordering.
-
-## 7. Relationship to other work
-
-Base58 Turbo was treated as a benchmark to beat, not as an implementation
-template.  Its encoder converts input bytes into 22 radix-`58^2` 16-bit limbs
-with an AVX2 `vpmaddwd` schedule and repeated carry rounds.  Braid58 instead
-converts ten radix-`2^26` chunks into eight radix-`58^6` 64-bit lanes, performs
-parallel reciprocal normalization, and resolves the residual carry dependency
-as a small prefix problem. Its AVX2 retuning uses nine radix-`58^5` cells so
-the analogous matrix fits native `vpmuludq`. The schedules and internal
-representations are different.
-
-Matrix radix conversion, close-radix decompositions, fixed-divisor reciprocal
-division, and carry-lookahead scans are all established ideas.  This particular
-`2^26 <-> 58^6` AVX-512 specialization was independently derived, and a limited
-prior-art search did not find the same schedule.  That is not a patentability,
-novelty, or freedom-to-operate conclusion.
-
-## 8. Reproducing the local build
-
-```sh
-make test
-make rust-test
-make bench
-```
-
-The first command builds the C library and differential suite through CMake.
-The second tests the safe Rust API. The benchmark builds the public Braid58 C
-API alongside exact pinned competitors and pins the run to one logical CPU.
+Source hashes are listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).

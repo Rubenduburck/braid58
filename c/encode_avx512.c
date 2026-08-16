@@ -1,13 +1,13 @@
 /*
-   Braid58: fixed-32-byte Bitcoin Base58 AVX-512 encoder.
+   AVX-512 Bitcoin Base58 encoder for 32-byte inputs.
 
-   This is an independently derived AVX-512 research kernel.  It interprets
-   the input as one unsigned, big-endian 256-bit integer and converts it via
+   The input is one unsigned big-endian 256-bit integer, converted as
 
        10 radix-2^26 chunks -> 8 radix-58^6 cells -> 48 radix-58 digits.
 
-   Required ISA: AVX2 and AVX-512 F/DQ/BW/VL/IFMA/VBMI.  The public API
-   dispatches here only on supported CPUs.
+   Required ISA: AVX2, BMI1, MOVBE, AVX-512F/DQ/BW/VL/IFMA/VBMI.
+   The build selects this body at compile time; it performs no runtime
+   dispatch.
 */
 
 #include "braid58_internal.h"
@@ -17,13 +17,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#if defined(__GNUC__) || defined(__clang__)
-#define BRAID58_TARGET                                                        \
-  __attribute__((target("avx2,avx512f,avx512dq,avx512bw,avx512vl,"          \
-                        "avx512ifma,avx512vbmi")))
-#else
-#define BRAID58_TARGET
-#endif
+#define BRAID58_ENCODED_32_CAP 45U
 
 enum { CHUNK_MASK = (1U << 26) - 1U };
 
@@ -86,7 +80,7 @@ static const uint8_t IOTA64[64] __attribute__((aligned(64))) = {
 };
 
 /* Convert the input to eight normalized little-endian radix-58^6 cells. */
-BRAID58_TARGET static inline __m512i
+static inline __m512i
 radix6_cells(const uint8_t input[static 32]) {
   /* a0+a1*2^26 is exactly the low 52 bits and only affects column zero. */
   uint64_t low52;
@@ -120,27 +114,32 @@ radix6_cells(const uint8_t input[static 32]) {
      the operation independent of the caller's floating-point environment.
      The approximation is within one; the two integer masks make it exact.
   */
+  enum {
+    rn_sae = _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC,
+    rz_sae = _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC
+  };
   const __m512i bv = _mm512_set1_epi64((long long)RADIX_B);
-  const __m512d as_double = _mm512_cvt_roundepu64_pd(
-      columns, _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
+  const __m512d as_double = _mm512_cvt_roundepu64_pd(columns, rn_sae);
   const __m512d quotient_double = _mm512_mul_round_pd(
-      as_double, _mm512_set1_pd(1.0 / 38068692544.0),
-      _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC);
-  __m512i q = _mm512_cvt_roundpd_epu64(
-      quotient_double, _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC);
+      as_double, _mm512_set1_pd(1.0 / 38068692544.0), rn_sae);
+  __m512i q = _mm512_cvt_roundpd_epu64(quotient_double, rz_sae);
 
   __m512i product = _mm512_mullo_epi64(q, bv);
   const __mmask8 too_high =
       _mm512_cmp_epu64_mask(product, columns, _MM_CMPINT_GT);
   const __m512i one = _mm512_set1_epi64(1);
-  q = _mm512_mask_sub_epi64(q, too_high, q, one);
-  product = _mm512_mask_sub_epi64(product, too_high, product, bv);
+  if (__builtin_expect(too_high != 0, 0)) {
+    q = _mm512_mask_sub_epi64(q, too_high, q, one);
+    product = _mm512_mask_sub_epi64(product, too_high, product, bv);
+  }
 
   __m512i r = _mm512_sub_epi64(columns, product);
   const __mmask8 too_low =
       _mm512_cmp_epu64_mask(r, bv, _MM_CMPINT_NLT);
-  q = _mm512_mask_add_epi64(q, too_low, q, one);
-  r = _mm512_mask_sub_epi64(r, too_low, r, bv);
+  if (__builtin_expect(too_low != 0, 0)) {
+    q = _mm512_mask_add_epi64(q, too_low, q, one);
+    r = _mm512_mask_sub_epi64(r, too_low, r, bv);
+  }
 
   /* Add each raw quotient to the next cell. */
   const __m512i q_previous = _mm512_maskz_permutexvar_epi64(
@@ -157,11 +156,16 @@ radix6_cells(const uint8_t input[static 32]) {
   uint32_t g = (uint32_t)_mm512_cmp_epu64_mask(sum, bv, _MM_CMPINT_NLT);
   uint32_t p = (uint32_t)_mm512_cmpeq_epi64_mask(
       sum, _mm512_set1_epi64((long long)(RADIX_B - 1U)));
-  g |= p & (g << 1);
-  p &= p << 1;
-  g |= p & (g << 2);
-  p &= p << 2;
-  g |= p & (g << 4);
+  /* Exact propagation is vanishingly rare for this 38-billion-sized radix.
+     Keep the common path to the generate mask alone; only construct the
+     carry-lookahead prefix when an equality lane can actually propagate. */
+  if (__builtin_expect(p != 0U, 0)) {
+    g |= p & (g << 1);
+    p &= p << 1;
+    g |= p & (g << 2);
+    p &= p << 2;
+    g |= p & (g << 4);
+  }
   g &= 0xffU;
 
   const __mmask8 carry_in = (__mmask8)((g << 1) & 0xffU);
@@ -170,7 +174,7 @@ radix6_cells(const uint8_t input[static 32]) {
 }
 
 /* Turn eight radix-58^6 cells into 48 big-endian binary digit values. */
-BRAID58_TARGET static inline __m512i
+static inline __m512i
 radix6_digits(__m512i cells) {
   /* Split B=(58^3)^2.  The IFMA reciprocal produces the exact quotient for
      cells<B after the fixed 12-bit scale adjustment. */
@@ -223,9 +227,9 @@ radix6_digits(__m512i cells) {
    length excludes the trailing NUL.  The function implements Bitcoin's full
    leading-zero-byte rule, including the all-zero input.
 */
-BRAID58_TARGET size_t
+size_t
 braid58_encode_32_avx512(const uint8_t input[static 32],
-                         char output[static BRAID58_ENCODED_32_CAPACITY]) {
+                         char output[static BRAID58_ENCODED_32_CAP]) {
   const __m256i input256 =
       _mm256_loadu_si256((const __m256i *)(const void *)input);
   const uint32_t zero_mask = (uint32_t)_mm256_movemask_epi8(
@@ -260,4 +264,262 @@ braid58_encode_32_avx512(const uint8_t input[static 32],
                    _mm512_extracti32x4_epi32(ascii, 2));
   output[length] = '\0';
   return length;
+}
+
+static inline void
+batch_load_chunks(const uint8_t input[32], uint64_t *low52,
+                  __m512i *chunks) {
+  memcpy(low52, input + 24, sizeof(*low52));
+  *low52 = __builtin_bswap64(*low52) & ((UINT64_C(1) << 52) - 1U);
+  const __m256i input256 =
+      _mm256_loadu_si256((const __m256i *)(const void *)input);
+  const __m512i source = _mm512_zextsi256_si512(input256);
+  *chunks = _mm512_permutexvar_epi8(
+      _mm512_load_si512((const void *)GATHER26_BE), source);
+  *chunks = _mm512_and_si512(
+      _mm512_srlv_epi64(*chunks,
+          _mm512_load_si512((const void *)SHIFT26_BE)),
+      _mm512_set1_epi64(CHUNK_MASK));
+}
+
+static inline __m512i
+batch_finish_cells(__m512i columns, __m512i q, __m512i product) {
+  const __m512i bv = _mm512_set1_epi64((long long)RADIX_B);
+  const __m512i one = _mm512_set1_epi64(1);
+  const __mmask8 too_high =
+      _mm512_cmp_epu64_mask(product, columns, _MM_CMPINT_GT);
+  if (__builtin_expect(too_high != 0, 0)) {
+    q = _mm512_mask_sub_epi64(q, too_high, q, one);
+    product = _mm512_mask_sub_epi64(product, too_high, product, bv);
+  }
+  __m512i remainder = _mm512_sub_epi64(columns, product);
+  const __mmask8 too_low =
+      _mm512_cmp_epu64_mask(remainder, bv, _MM_CMPINT_NLT);
+  if (__builtin_expect(too_low != 0, 0)) {
+    q = _mm512_mask_add_epi64(q, too_low, q, one);
+    remainder = _mm512_mask_sub_epi64(remainder, too_low, remainder, bv);
+  }
+
+  const __m512i q_previous = _mm512_maskz_permutexvar_epi64(
+      (__mmask8)0xfe,
+      _mm512_load_si512((const void *)Q_PREV_INDEX), q);
+  __m512i sum = _mm512_add_epi64(remainder, q_previous);
+  uint32_t generate =
+      (uint32_t)_mm512_cmp_epu64_mask(sum, bv, _MM_CMPINT_NLT);
+  uint32_t propagate = (uint32_t)_mm512_cmpeq_epi64_mask(
+      sum, _mm512_set1_epi64((long long)(RADIX_B - 1U)));
+  if (__builtin_expect(propagate != 0U, 0)) {
+    generate |= propagate & (generate << 1);
+    propagate &= propagate << 1;
+    generate |= propagate & (generate << 2);
+    propagate &= propagate << 2;
+    generate |= propagate & (generate << 4);
+  }
+  generate &= 0xffU;
+  sum = _mm512_mask_add_epi64(
+      sum, (__mmask8)((generate << 1) & 0xffU), sum, one);
+  return _mm512_mask_sub_epi64(sum, (__mmask8)generate, sum, bv);
+}
+
+static inline void
+batch_cells2(const uint8_t input[2][32], __m512i *cell0, __m512i *cell1) {
+  uint64_t low0, low1;
+  __m512i chunks0, chunks1;
+  batch_load_chunks(input[0], &low0, &chunks0);
+  batch_load_chunks(input[1], &low1, &chunks1);
+  uint64_t a0[8] __attribute__((aligned(64)));
+  uint64_t a1[8] __attribute__((aligned(64)));
+  _mm512_store_si512((void *)a0, chunks0);
+  _mm512_store_si512((void *)a1, chunks1);
+
+  __m512i column0 = _mm512_mask_set1_epi64(
+      _mm512_setzero_si512(), (__mmask8)1, (long long)low0);
+  __m512i column1 = _mm512_mask_set1_epi64(
+      _mm512_setzero_si512(), (__mmask8)1, (long long)low1);
+  for (unsigned i = 0; i < 8; ++i) {
+    const __m512i weight = _mm512_load_si512((const void *)W6[i + 2]);
+    column0 = _mm512_add_epi64(column0, _mm512_mullo_epi64(
+        _mm512_set1_epi64((long long)a0[i]), weight));
+    column1 = _mm512_add_epi64(column1, _mm512_mullo_epi64(
+        _mm512_set1_epi64((long long)a1[i]), weight));
+  }
+
+  enum {
+    rn_sae = _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC,
+    rz_sae = _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC
+  };
+  const __m512d reciprocal = _mm512_set1_pd(1.0 / 38068692544.0);
+  const __m512i bv = _mm512_set1_epi64((long long)RADIX_B);
+  const __m512d d0 = _mm512_cvt_roundepu64_pd(column0, rn_sae);
+  const __m512d d1 = _mm512_cvt_roundepu64_pd(column1, rn_sae);
+  __m512i q0 = _mm512_cvt_roundpd_epu64(
+      _mm512_mul_round_pd(d0, reciprocal, rn_sae), rz_sae);
+  __m512i q1 = _mm512_cvt_roundpd_epu64(
+      _mm512_mul_round_pd(d1, reciprocal, rn_sae), rz_sae);
+  *cell0 = batch_finish_cells(column0, q0, _mm512_mullo_epi64(q0, bv));
+  *cell1 = batch_finish_cells(column1, q1, _mm512_mullo_epi64(q1, bv));
+}
+
+static inline void
+batch_cells3(const uint8_t input[3][32], __m512i *cell0, __m512i *cell1,
+             __m512i *cell2) {
+  uint64_t low0, low1, low2;
+  __m512i chunks0, chunks1, chunks2;
+  batch_load_chunks(input[0], &low0, &chunks0);
+  batch_load_chunks(input[1], &low1, &chunks1);
+  batch_load_chunks(input[2], &low2, &chunks2);
+  uint64_t a0[8] __attribute__((aligned(64)));
+  uint64_t a1[8] __attribute__((aligned(64)));
+  uint64_t a2[8] __attribute__((aligned(64)));
+  _mm512_store_si512((void *)a0, chunks0);
+  _mm512_store_si512((void *)a1, chunks1);
+  _mm512_store_si512((void *)a2, chunks2);
+
+  __m512i column0 = _mm512_mask_set1_epi64(
+      _mm512_setzero_si512(), (__mmask8)1, (long long)low0);
+  __m512i column1 = _mm512_mask_set1_epi64(
+      _mm512_setzero_si512(), (__mmask8)1, (long long)low1);
+  __m512i column2 = _mm512_mask_set1_epi64(
+      _mm512_setzero_si512(), (__mmask8)1, (long long)low2);
+  for (unsigned i = 0; i < 8; ++i) {
+    const __m512i weight = _mm512_load_si512((const void *)W6[i + 2]);
+    column0 = _mm512_add_epi64(column0, _mm512_mullo_epi64(
+        _mm512_set1_epi64((long long)a0[i]), weight));
+    column1 = _mm512_add_epi64(column1, _mm512_mullo_epi64(
+        _mm512_set1_epi64((long long)a1[i]), weight));
+    column2 = _mm512_add_epi64(column2, _mm512_mullo_epi64(
+        _mm512_set1_epi64((long long)a2[i]), weight));
+  }
+
+  enum {
+    rn_sae = _MM_FROUND_TO_NEAREST_INT | _MM_FROUND_NO_EXC,
+    rz_sae = _MM_FROUND_TO_ZERO | _MM_FROUND_NO_EXC
+  };
+  const __m512d reciprocal = _mm512_set1_pd(1.0 / 38068692544.0);
+  const __m512i bv = _mm512_set1_epi64((long long)RADIX_B);
+  const __m512d d0 = _mm512_cvt_roundepu64_pd(column0, rn_sae);
+  const __m512d d1 = _mm512_cvt_roundepu64_pd(column1, rn_sae);
+  const __m512d d2 = _mm512_cvt_roundepu64_pd(column2, rn_sae);
+  __m512i q0 = _mm512_cvt_roundpd_epu64(
+      _mm512_mul_round_pd(d0, reciprocal, rn_sae), rz_sae);
+  __m512i q1 = _mm512_cvt_roundpd_epu64(
+      _mm512_mul_round_pd(d1, reciprocal, rn_sae), rz_sae);
+  __m512i q2 = _mm512_cvt_roundpd_epu64(
+      _mm512_mul_round_pd(d2, reciprocal, rn_sae), rz_sae);
+  *cell0 = batch_finish_cells(column0, q0, _mm512_mullo_epi64(q0, bv));
+  *cell1 = batch_finish_cells(column1, q1, _mm512_mullo_epi64(q1, bv));
+  *cell2 = batch_finish_cells(column2, q2, _mm512_mullo_epi64(q2, bv));
+}
+
+static inline void
+batch_digits2(__m512i cell0, __m512i cell1,
+              __m512i *digits0, __m512i *digits1) {
+  const __m512i reciprocal3 =
+      _mm512_set1_epi64(INT64_C(94544385141404));
+  const __m512i radix_m = _mm512_set1_epi64((long long)RADIX_M);
+  const __m512i q30 = _mm512_srli_epi64(
+      _mm512_madd52hi_epu64(
+          _mm512_setzero_si512(), cell0, reciprocal3), 12);
+  const __m512i q31 = _mm512_srli_epi64(
+      _mm512_madd52hi_epu64(
+          _mm512_setzero_si512(), cell1, reciprocal3), 12);
+  const __m512i r30 =
+      _mm512_sub_epi64(cell0, _mm512_mullo_epi64(q30, radix_m));
+  const __m512i r31 =
+      _mm512_sub_epi64(cell1, _mm512_mullo_epi64(q31, radix_m));
+
+  __m512i v30 = _mm512_castsi256_si512(_mm512_cvtepi64_epi32(q30));
+  __m512i v31 = _mm512_castsi256_si512(_mm512_cvtepi64_epi32(q31));
+  v30 = _mm512_inserti64x4(v30, _mm512_cvtepi64_epi32(r30), 1);
+  v31 = _mm512_inserti64x4(v31, _mm512_cvtepi64_epi32(r31), 1);
+  const __m512i magic = _mm512_set1_epi64(INT64_C(40855813));
+  const __m512i qe0 = _mm512_srli_epi64(_mm512_mul_epu32(v30, magic), 37);
+  const __m512i qe1 = _mm512_srli_epi64(_mm512_mul_epu32(v31, magic), 37);
+  const __m512i qo0 = _mm512_srli_epi64(
+      _mm512_mul_epu32(_mm512_srli_epi64(v30, 32), magic), 37);
+  const __m512i qo1 = _mm512_srli_epi64(
+      _mm512_mul_epu32(_mm512_srli_epi64(v31, 32), magic), 37);
+  const __m512i q10 = _mm512_mask_blend_epi32(
+      (__mmask16)0xaaaa, qe0, _mm512_slli_epi64(qo0, 32));
+  const __m512i q11 = _mm512_mask_blend_epi32(
+      (__mmask16)0xaaaa, qe1, _mm512_slli_epi64(qo1, 32));
+  const __m512i radix2 = _mm512_set1_epi32(3364);
+  const __m512i r20 = _mm512_sub_epi32(v30, _mm512_mullo_epi32(q10, radix2));
+  const __m512i r21 = _mm512_sub_epi32(v31, _mm512_mullo_epi32(q11, radix2));
+  const __m256i lead0 = _mm512_cvtepi32_epi16(q10);
+  const __m256i lead1 = _mm512_cvtepi32_epi16(q11);
+  const __m256i pair0 = _mm512_cvtepi32_epi16(r20);
+  const __m256i pair1 = _mm512_cvtepi32_epi16(r21);
+  const __m256i magic58 = _mm256_set1_epi16(1130);
+  const __m256i radix58 = _mm256_set1_epi16(58);
+  const __m256i middle0 = _mm256_mulhi_epu16(pair0, magic58);
+  const __m256i middle1 = _mm256_mulhi_epu16(pair1, magic58);
+  const __m256i low0 =
+      _mm256_sub_epi16(pair0, _mm256_mullo_epi16(middle0, radix58));
+  const __m256i low1 =
+      _mm256_sub_epi16(pair1, _mm256_mullo_epi16(middle1, radix58));
+  __m512i fields0 =
+      _mm512_castsi128_si512(_mm256_cvtepi16_epi8(lead0));
+  __m512i fields1 =
+      _mm512_castsi128_si512(_mm256_cvtepi16_epi8(lead1));
+  fields0 = _mm512_inserti32x4(fields0, _mm256_cvtepi16_epi8(middle0), 1);
+  fields1 = _mm512_inserti32x4(fields1, _mm256_cvtepi16_epi8(middle1), 1);
+  fields0 = _mm512_inserti32x4(fields0, _mm256_cvtepi16_epi8(low0), 2);
+  fields1 = _mm512_inserti32x4(fields1, _mm256_cvtepi16_epi8(low1), 2);
+  const __m512i order = _mm512_load_si512((const void *)ORDER6_CANON);
+  *digits0 = _mm512_permutexvar_epi8(order, fields0);
+  *digits1 = _mm512_permutexvar_epi8(order, fields1);
+}
+
+static inline size_t
+batch_finish_encode(const uint8_t input[32], __m512i digits,
+                    char output[45]) {
+  const __m256i input256 =
+      _mm256_loadu_si256((const __m256i *)(const void *)input);
+  const uint32_t zero_mask = (uint32_t)_mm256_movemask_epi8(
+      _mm256_cmpeq_epi8(input256, _mm256_setzero_si256()));
+  const uint32_t nonzero_mask = ~zero_mask;
+  const unsigned leading_zero_bytes =
+      nonzero_mask ? (unsigned)__builtin_ctz(nonzero_mask) : 32U;
+  uint64_t nonzero_digits = (uint64_t)_mm512_cmpneq_epi8_mask(
+      digits, _mm512_setzero_si512());
+  nonzero_digits &= (UINT64_C(1) << 48) - 1U;
+  const unsigned first_digit = nonzero_digits
+      ? (unsigned)__builtin_ctzll(nonzero_digits) : 48U;
+  const __m512i ascii = _mm512_permutexvar_epi8(
+      digits, _mm512_load_si512((const void *)BITCOIN_ALPHABET));
+  const unsigned skip = first_digit - leading_zero_bytes;
+  const size_t length = 48U - skip;
+  const __m512i shift = _mm512_add_epi8(
+      _mm512_load_si512((const void *)IOTA64),
+      _mm512_set1_epi8((char)skip));
+  const __m512i start = _mm512_permutexvar_epi8(shift, ascii);
+  _mm256_storeu_si256(
+      (__m256i *)(void *)output, _mm512_castsi512_si256(start));
+  _mm_storeu_si128((__m128i *)(void *)(output + length - 16U),
+                   _mm512_extracti32x4_epi32(ascii, 2));
+  output[length] = '\0';
+  return length;
+}
+
+void
+braid58_encode_32x2_avx512(const uint8_t input[2][32],
+                           char output[2][45], size_t output_len[2]) {
+  __m512i cell0, cell1, digits0, digits1;
+  batch_cells2(input, &cell0, &cell1);
+  batch_digits2(cell0, cell1, &digits0, &digits1);
+  output_len[0] = batch_finish_encode(input[0], digits0, output[0]);
+  output_len[1] = batch_finish_encode(input[1], digits1, output[1]);
+}
+
+void
+braid58_encode_32x3_avx512(const uint8_t input[3][32],
+                           char output[3][45], size_t output_len[3]) {
+  __m512i cell0, cell1, cell2, digits0, digits1;
+  batch_cells3(input, &cell0, &cell1, &cell2);
+  batch_digits2(cell0, cell1, &digits0, &digits1);
+  const __m512i digits2 = radix6_digits(cell2);
+  output_len[0] = batch_finish_encode(input[0], digits0, output[0]);
+  output_len[1] = batch_finish_encode(input[1], digits1, output[1]);
+  output_len[2] = batch_finish_encode(input[2], digits2, output[2]);
 }

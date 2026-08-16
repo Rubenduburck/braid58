@@ -12,6 +12,21 @@ pub unsafe extern "C" fn turbo_base58_encode_32(input: *const u8, output: *mut u
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn turbo_base58_encode_32x3(
+    input: *const u8,
+    output: *mut u8,
+    lengths: *mut u8,
+) -> usize {
+    // SAFETY: The C benchmark supplies three fixed-size live records.
+    let input = unsafe { slice::from_raw_parts(input.cast::<[u8; 32]>(), 3) };
+    let output = unsafe { slice::from_raw_parts_mut(output.cast::<[u8; 44]>(), 3) };
+    let lengths = unsafe { slice::from_raw_parts_mut(lengths, 3) };
+    BITCOIN
+        .encode_32_batch(input, output, lengths)
+        .map_or(ERROR, |()| 0)
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn turbo_base58_encode_64(input: *const u8, output: *mut u8) -> usize {
     // SAFETY: The C benchmark supplies fixed-size live buffers.
     let input = unsafe { slice::from_raw_parts(input, 64) };

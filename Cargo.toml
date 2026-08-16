@@ -3,19 +3,31 @@ name = "braid58"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Fast fixed-width Bitcoin Base58 for 32-byte values"
+description = "Fast fixed-width Bitcoin Base58 for 32- and 64-byte values"
 readme = "README.md"
 keywords = ["base58", "encoding", "simd", "avx512"]
 categories = ["encoding", "no-std"]
 links = "braid58"
 include = [
-    "Cargo.toml",
-    "build.rs",
-    "README.md",
-    "include/braid58.h",
-    "c/*.c",
-    "c/*.h",
-    "src/lib.rs",
+    "/Cargo.toml",
+    "/build.rs",
+    "/CMakeLists.txt",
+    "/Makefile",
+    "/README.md",
+    "/BENCHMARKS.md",
+    "/DESIGN.md",
+    "/bench/*.c",
+    "/bench/*.patch",
+    "/bench/*.sh",
+    "/bench/results/*.png",
+    "/cmake/*.in",
+    "/docs/*.md",
+    "/include/braid58.h",
+    "/c/*.c",
+    "/c/*.h",
+    "/scripts/*.sh",
+    "/src/lib.rs",
+    "/tests/*.c",
 ]
 # Choose and add a project license before publishing.
 publish = false
@@ -25,13 +37,14 @@ path = "src/lib.rs"
 
 [features]
 default = []
-force-scalar = []
+avx2 = []
+avx512 = ["avx2"]
 
 [build-dependencies]
 cc = "1"
 
 [package.metadata.docs.rs]
-features = ["force-scalar"]
+no-default-features = true
 
 [lints.rust]
 missing_docs = "warn"

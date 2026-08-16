@@ -1,122 +1,222 @@
 # Braid58
 
-Fast, fixed-width Bitcoin Base58 for 32-byte values.
+Bitcoin Base58 codec for fixed 32-byte and 64-byte values.
 
-Braid58 provides a small C ABI and an allocation-free Rust API. It selects
-dedicated AVX-512 or AVX2 radix-conversion kernels at runtime on supported
-x86-64 CPUs and falls back to a portable scalar implementation everywhere
-else. Encoding preserves Bitcoin's leading-zero rule; decoding accepts only
-canonical values that produce exactly 32 bytes.
+The name comes from the radix-conversion schedule.
+For radix-`2^26` input limbs `x_i`, each output-cell accumulator is `y_j = sum_i(x_i M_ij)`.
+The independent `y_j` chains are evaluated in parallel, then joined by carry propagation in radix `B`, where `B = 58^6` for AVX-512 Encode32 and `B = 58^5` for AVX2 and Encode64.
 
-## Rust
+## Base58 Turbo benchmark
+
+Measured with [Base58 Turbo](https://github.com/hacer-bark/base58-turbo)'s benchmark at `18c8f94eadfa5643dfd7e31b02250d3bf184fa68`.
+Each Braid58 backend and Turbo are measured in the same executable with identical inputs.
+Outputs are verified before timing.
+
+### AVX2
+
+<img alt="Base58 Turbo Criterion benchmark with Braid58 AVX2 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-avx2-9995wx.png">
+
+| Operation | Braid58 AVX2 | Base58 Turbo AVX2 |
+|---|---:|---:|
+| Encode32 | 1.3361 GiB/s | 1.2448 GiB/s |
+| Decode32 | 3.6961 GiB/s | 2.3830 GiB/s |
+| Encode64 | 1.4365 GiB/s | 1.3604 GiB/s |
+| Decode64 | 2.9100 GiB/s | 2.2701 GiB/s |
+
+### AVX-512
+
+> **ISA comparison:** This table compares Braid58 AVX-512 with Base58 Turbo AVX2.
+> Base58 Turbo has no AVX-512 backend.
+> The AVX2 table measures both implementations at the same ISA level.
+
+<img alt="Base58 Turbo Criterion benchmark with Braid58 AVX-512 on an AMD Ryzen Threadripper PRO 9995WX" src="bench/results/turbo-criterion-avx512-9995wx.png">
+
+| Operation | Braid58 AVX-512 | Base58 Turbo AVX2 |
+|---|---:|---:|
+| Encode32 | 2.7307 GiB/s | 1.3784 GiB/s |
+| Decode32 | 4.9969 GiB/s | 2.3406 GiB/s |
+| Encode64 | 1.6458 GiB/s | 1.4307 GiB/s |
+| Decode64 | 7.2930 GiB/s | 2.4205 GiB/s |
+
+<p align="center"><sub>
+AMD Ryzen Threadripper PRO 9995WX, CPU 31.
+Braid58: GCC 16.2.1.
+Base58 Turbo AVX2: Rust 1.96.0.
+Encode throughput counts binary input bytes; decode throughput counts encoded input bytes.
+</sub></p>
+
+### Encode32 x3
+
+The SIMD backends provide staged x2 and x3 encoders.
+This benchmark calls `braid58_encode_32x3` and Base58 Turbo's public `encode_32_batch` through a C bridge.
+Each call receives the same three full-width inputs, and output comparison precedes timing.
+The AVX2 Braid58 and Turbo builds target the Haswell ISA floor.
+
+| Braid target | Braid ticks/batch | Turbo ticks/batch | Braid throughput | Turbo throughput |
+|---|---:|---:|---:|---:|
+| AVX2 | 117.68 | 140.03 | 1.899 GiB/s | 1.596 GiB/s |
+| AVX-512 | 66.98 | 144.94 | 3.337 GiB/s | 1.542 GiB/s |
+
+On AVX2, Braid58 x3 uses 39.23 ticks per value, compared with 56.95 ticks for Braid58 single-value encoding and 46.68 ticks for Turbo x3.
+The x3 kernel reduces per-value time by 31.1% and 16.0%, respectively.
+
+Turbo has no fixed-64 batch entry point.
+Against three sequential Turbo calls, AVX2 Encode64 x3 measures 1.798 GiB/s versus 1.602 GiB/s and reduces Braid58's single-value time per value by 20.4%.
+The AVX-512 Encode64 x2/x3 entry points call the single-value kernel once per lane; they are not dedicated batch kernels.
+
+> **ISA comparison:** The AVX-512 row compares Braid58 AVX-512 with Base58 Turbo AVX2.
+> It does not isolate implementation performance at a common ISA level.
+
+Exact commands and timing intervals are in [BENCHMARKS.md](BENCHMARKS.md).
+
+## Properties
+
+- Bitcoin alphabet only.
+- Canonical leading-zero encoding.
+- Exact decoded width: 32 or 64 bytes.
+- No allocation.
+- Fixed x2/x3 encoding APIs with dedicated SIMD schedules where listed.
+- Decoder output is unchanged on failure.
+- Compile-time scalar, AVX2, or AVX-512 selection.
+- No CPUID checks or runtime dispatch.
+
+## Algorithm comparison
+
+| Implementation | Input scope | Conversion | SIMD selection |
+|---|---|---|---|
+| Braid58 | Fixed 32/64 bytes | Precomputed `2^26 -> 58^5/58^6` encode matrices and `58^4 -> 2^32` decode matrices | Compile time |
+| Base58 Turbo | Variable length | Radix-`58^2` limbs with repeated normalization | Runtime |
+| Firedancer bs58 | Fixed 32/64 bytes | Firedancer-specific limb and conversion schedule | Build configuration |
+
+Braid58 uses separate AVX2 and AVX-512 matrix layouts.
+No Turbo or Firedancer algorithm source is used.
+
+## Rust API
 
 The crate is `no_std` and has no runtime Rust dependencies.
 
 ```rust
 let bytes = [42_u8; 32];
-let encoded = braid58::encode_32(&bytes);
+let text = braid58::encode_32(&bytes);
+assert_eq!(braid58::decode_32(text.as_str())?, bytes);
 
-assert_eq!(braid58::decode_32(encoded.as_str())?, bytes);
-println!("{encoded}");
+let bytes = [7_u8; 64];
+let text = braid58::encode_64(&bytes);
+assert_eq!(braid58::decode_64(text.as_str())?, bytes);
+
+let inputs = [[1_u8; 32], [2_u8; 32], [3_u8; 32]];
+let encoded = braid58::encode_32x3(&inputs);
+assert_eq!(encoded[1], braid58::encode_32(&inputs[1]));
 # Ok::<(), braid58::DecodeError>(())
 ```
 
-`Encoded32` implements `Display`, `Deref<Target = str>`, `AsRef<str>`, and
-`AsRef<[u8]>`. `decode_32` accepts either text or bytes, while
-`decode_32_into` reuses a caller-provided output buffer and leaves it unchanged
-on failure. `backend()` reports the selected implementation.
+`Encoded32` and `Encoded64` implement `Display`, `Deref<Target = str>`, `AsRef<str>`, and `AsRef<[u8]>`.
+`decode_32_into` and `decode_64_into` write to caller-provided arrays.
+`encode_32x2`, `encode_32x3`, `encode_64x2`, and `encode_64x3` expose the fixed batch entry points.
 
 ```sh
 cargo test
-cargo test --features force-scalar
+RUSTFLAGS="-C target-cpu=native" cargo test
 ```
 
-The crate currently has `publish = false` because the imported prototype did
-not include a project license. Choose a license before publishing it.
+Braid58 selects the backend from Cargo's compilation target.
+Generic targets use the portable scalar implementation; `-C target-cpu=native` exposes the host CPU features and selects the fastest compatible backend.
+The `avx2` and `avx512` Cargo features are explicit overrides for binaries that require those ISA levels.
+Backend selection is compile-time and adds no runtime dispatch.
 
-## C
+## C API
 
 ```c
 #include <braid58.h>
 
-uint8_t input[BRAID58_BINARY_32_SIZE] = {0};
-uint8_t decoded[BRAID58_BINARY_32_SIZE];
+uint8_t input[32] = {0};
+uint8_t decoded[32];
 char encoded[BRAID58_ENCODED_32_CAPACITY];
 
 size_t length = braid58_encode_32(input, encoded);
-if (!braid58_decode_32(encoded, length, decoded)) {
-  /* invalid, overflowing, or noncanonical input */
-}
+int ok = braid58_decode_32(encoded, length, decoded);
+
+uint8_t batch[3][32] = {{0}};
+char batch_encoded[3][BRAID58_ENCODED_32_CAPACITY];
+size_t batch_length[3];
+braid58_encode_32x3(batch, batch_encoded, batch_length);
 ```
 
-Build and install a static library by default, or set `BUILD_SHARED_LIBS=ON`:
+Exported symbols:
+
+- `braid58_encode_32`
+- `braid58_encode_32x2`
+- `braid58_encode_32x3`
+- `braid58_decode_32`
+- `braid58_encode_64`
+- `braid58_encode_64x2`
+- `braid58_encode_64x3`
+- `braid58_decode_64`
+
+Build and install:
 
 ```sh
-cmake -S . -B build/cmake -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build/cmake \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBRAID58_TARGET=native
 cmake --build build/cmake
 ctest --test-dir build/cmake
 cmake --install build/cmake --prefix /usr/local
 ```
 
-Installed consumers can use either CMake or pkg-config:
+CMake and pkg-config metadata are installed with the library.
 
 ```cmake
 find_package(braid58 0.1 CONFIG REQUIRED)
-target_link_libraries(my_target PRIVATE braid58::braid58)
+target_link_libraries(app PRIVATE braid58::braid58)
 ```
 
 ```sh
 cc app.c $(pkg-config --cflags --libs braid58)
 ```
 
-The installed ABI exports only:
+Set `BUILD_SHARED_LIBS=ON` for a shared library.
 
-- `braid58_encode_32`
-- `braid58_decode_32`
-- `braid58_get_backend`
+## Targets
 
-## CPU backends
+| Backend | Cargo | CMake | ISA |
+|---|---|---|---|
+| Scalar | Generic target | `scalar` | Portable C11 |
+| AVX2 | AVX2 target feature or `avx2` | `avx2` | Cargo: AVX2; CMake: Haswell |
+| AVX-512 | Required target features or `avx512` | `avx512` | AVX2, BMI1, MOVBE, AVX-512 F/DQ/BW/VL/IFMA/VBMI |
+| Native | `-C target-cpu=native` | `native` | Highest backend supported by the compilation target |
 
-The fastest backend requires AVX2 and AVX-512 F, DQ, BW, VL, IFMA, VBMI, and
-VBMI2. AVX2-only CPUs use a separate 256-bit implementation; other CPUs use
-the scalar backend. The public API checks every required feature before
-dispatching, so binaries remain safe on unsupported CPUs.
+`BRAID58_TARGET` defaults to `scalar`.
+Cargo target detection uses `CARGO_CFG_TARGET_ARCH` and `CARGO_CFG_TARGET_FEATURE`, so cross-compilation follows the target rather than the build host.
+SIMD backends require x86-64 and GCC or Clang and must not execute on CPUs missing the listed ISA.
 
-CMake exposes `BRAID58_ENABLE_AVX2` and `BRAID58_ENABLE_AVX512` independently.
-The Rust `force-scalar` feature disables both vector backends.
+Selected kernels:
 
-GNU-compatible and Clang-compatible compilers build both vector backends on
-x86-64. Other compilers and architectures build the scalar backend only.
+| Target | Encode32 | Decode32 | Encode64 | Decode64 |
+|---|---|---|---|---|
+| AVX2 | B5 single/x2/x3 | B4 | B5 single/x2/x3 | B4 |
+| 9995WX AVX-512 | ZMM B6 single/x2/x3 | mixed ZMM B4 | ZMM B5 single | mixed ZMM/YMM B4 |
 
-## Development
+## Verification
 
 ```sh
-make test        # CMake build plus the C differential suite
-make rust-test   # Rust unit tests and doctests
-make bench       # Braid58, Base58 Turbo, five8, and Firedancer
+make test
+make test-optimized TEST_TARGET=native
+make test-sanitize TEST_TARGET=native
+make rust-test
+make audit
+make bench
 ```
 
-The C suite covers two million encoder differentials, 200,000 arbitrary
-decoder differentials, leading-zero cases, invalid bytes, overflow,
-canonicality, failure atomicity, and all three runtime backends. The Rust tests
-exercise the safe wrapper and forced-scalar build.
+The C tests cover differential encoding and decoding, all leading-zero prefix lengths, invalid alphabet bytes, overflow, canonicality, NULL arguments, and failure-atomic decode output.
+`make audit` checks the AVX2 ISA boundary, selected AVX-512 instruction families, and the exported ABI.
 
-On the recorded Threadripper PRO 9995WX run, the runtime-dispatched public C
-API reached 2.142 GiB/s for 32-byte encoding and 3.357 GiB/s for 44-character
-decoding. These are hot-cache throughput results, not universal latency claims.
-See [BENCHMARKS.md](BENCHMARKS.md) for the complete same-host comparison and
-[DESIGN.md](DESIGN.md) for the radix construction.
+Benchmark data and the pinned Base58 Turbo gate are documented in [BENCHMARKS.md](BENCHMARKS.md) and [docs/TURBO_GATE.md](docs/TURBO_GATE.md).
 
-With Braid58 capped at AVX2 on the same CPU, the dedicated backend reached
-1.407 GiB/s encoding and 1.448 GiB/s decoding. Its encoder beat Base58 Turbo,
-five8, and Firedancer in the same public-API harness, although the reproduced
-Turbo margin was only 0.3--2.5%. Its decoder beat Firedancer but remained
-behind Turbo and five8. Native AVX-512 was still faster. The exact AVX2-capped
-results are recorded in `BENCHMARKS.md`.
+## Restrictions
 
-## Scope
-
-- Exactly 32 decoded bytes and the Bitcoin alphabet.
-- No allocation in either public API.
-- Decoder failure leaves the output untouched.
-- Research implementation: not audited and not promised constant-time.
+- Inputs and outputs must not overlap.
+- SIMD builds do not check CPU features.
+- Execution is data-dependent and not constant-time.
+- The implementation has not received an independent security audit.
+- No project license is assigned; Cargo publishing is disabled.

@@ -1,102 +1,230 @@
-# Local benchmark record
+# Benchmarks
 
-## 2026-08-15 comparison with Base58 Turbo, five8, and Firedancer
+Benchmark reproduction requires a full repository checkout.
 
-The repository benchmark was run on an AMD Ryzen Threadripper PRO 9995WX
-96-Core, pinned to logical CPU 31.  Braid58 used its runtime-dispatched public
-C API, compiled with GCC 16.2.1 at `-O3 -mtune=native`; its private AVX-512
-and AVX2 functions carry explicit target attributes. Firedancer and the C
-harness used
-`-O3 -march=native -fno-stack-protector`.  Base58 Turbo 0.3.0 and five8 1.0.0
-used their Cargo release profiles with Rust 1.96.0 and
-`-C target-cpu=native`.  The Firedancer comparison is official commit
-`e14b9929232019aa61f9258406a4c926e5fee75a` with its AVX2 path.
+## Host
 
-Before timing, the harness compared Braid58, Base58 Turbo, five8, and
-Firedancer encodings and round-trips for 1,024 deterministic 32-byte inputs.
-It also compared Turbo, five8, and Firedancer for 1,024 64-byte inputs.  The
-inputs have their high bit set so the timed decoder corpus consistently uses
-the common maximum lengths of 44 and 88 characters.  All comparisons passed.
+- CPU: AMD Ryzen Threadripper PRO 9995WX
+- CPU affinity: logical CPU 31
+- C compiler: GCC 16.2.1
+- Rust: 1.96.0
+- TSC: invariant, 2.500 GHz calibration
+- Corpus: deterministic, cache-resident
 
-The values below come from 15 trials of 1,000,000 complete public API calls.
-The corpus and output buffers are hot in cache.  TSC ticks are neither core
-cycles nor nanoseconds; this host's invariant TSC calibrated to 2.500 GHz.
-Calls/s and GiB/s use the median tick count.  Matching Base58 Turbo's Criterion
-convention, encode throughput counts binary input bytes and decode throughput
-counts encoded input bytes (44 or 88 per call).
+TSC ticks are not core cycles. GiB/s counts binary input bytes for encode and
+encoded input bytes for decode.
 
-| Operation | Min ticks | Median ticks | Max ticks | Mcalls/s | GiB/s |
-|---|---:|---:|---:|---:|---:|
-| Braid58 encode 32 | 34.34 | 34.79 | 37.44 | 71.87 | 2.142 |
-| Base58 Turbo encode 32 | 53.49 | 54.47 | 58.26 | 45.90 | 1.368 |
-| five8 encode 32 | 78.05 | 79.06 | 85.34 | 31.62 | 0.942 |
-| Firedancer encode 32 | 68.52 | 69.44 | 74.75 | 36.00 | 1.073 |
-| Braid58 decode 32 | 30.26 | 30.52 | 33.08 | 81.92 | 3.357 |
-| Base58 Turbo decode 32 | 44.02 | 44.26 | 48.03 | 56.48 | 2.314 |
-| five8 decode 32 | 62.61 | 64.43 | 68.64 | 38.80 | 1.590 |
-| Firedancer decode 32 | 100.90 | 102.74 | 109.69 | 24.33 | 0.997 |
-| Base58 Turbo encode 64 | 100.12 | 100.95 | 108.96 | 24.76 | 1.476 |
-| five8 encode 64 | 119.03 | 120.45 | 131.16 | 20.75 | 1.237 |
-| Firedancer encode 64 | 122.83 | 123.96 | 133.79 | 20.17 | 1.202 |
-| Base58 Turbo decode 64 | 80.78 | 81.89 | 88.22 | 30.53 | 2.502 |
-| five8 decode 64 | 254.87 | 257.79 | 275.03 | 9.70 | 0.795 |
-| Firedancer decode 64 | 357.95 | 369.86 | 391.39 | 6.76 | 0.554 |
+## Base58 Turbo gate
 
-At the median, Braid58 used 36.1% fewer TSC ticks than Base58 Turbo for 32-byte
-encoding and 31.0% fewer for decoding. Against five8, the reductions were
-56.0% and 52.6%, or 2.27x and 2.11x the call throughput. Against Firedancer,
-the reductions were 49.9% and 70.3%. At 64 bytes Turbo was fastest for both
-operations. five8 used 2.8% fewer encoding ticks and 30.3% fewer decoding
-ticks than Firedancer. Braid58 has no 64-byte implementation, so those rows
-are standalone baselines rather than direct comparisons.
+Comparator:
 
-### AVX2-only Braid58
+- Base58 Turbo 0.3.0
+- Commit `18c8f94eadfa5643dfd7e31b02250d3bf184fa68`
+- Features `unsafe-simd,std`
+- `RUSTFLAGS=-C target-cpu=znver5`
 
-The same harness was rebuilt with `BENCH_BRAID_MAX_ISA=avx2`, which omits the
-AVX-512 objects and makes the public dispatcher select the dedicated AVX2
-backend. Competitor settings, inputs, pinning, throughput accounting, trial
-ordering, and validation were unchanged. The final record below raises the
-sample count to 31 trials of 1,000,000 calls.
+The gate uses one executable, verifies outputs before timing, alternates call
+order, and reports the median of 17 paired trials.
 
-| Operation | Min ticks | Median ticks | Max ticks | Mcalls/s | GiB/s |
-|---|---:|---:|---:|---:|---:|
-| Braid58 AVX2 encode 32 | 51.74 | 52.95 | 56.47 | 47.21 | 1.407 |
-| Base58 Turbo encode 32 | 53.28 | 54.30 | 58.14 | 46.04 | 1.372 |
-| five8 encode 32 | 78.08 | 79.39 | 85.09 | 31.49 | 0.938 |
-| Firedancer encode 32 | 68.50 | 69.78 | 74.82 | 35.83 | 1.068 |
-| Braid58 AVX2 decode 32 | 69.52 | 70.73 | 75.78 | 35.34 | 1.448 |
-| Base58 Turbo decode 32 | 43.87 | 45.14 | 47.98 | 55.38 | 2.269 |
-| five8 decode 32 | 61.63 | 63.23 | 74.57 | 39.54 | 1.620 |
-| Firedancer decode 32 | 101.10 | 103.90 | 110.68 | 24.06 | 0.986 |
+| Operation | Corpus | Braid ticks | Turbo ticks | Braid reduction |
+|---|---|---:|---:|---:|
+| Encode32 | full width | 31.618 | 54.642 | 41.348% |
+| Decode32 | full width | 25.448 | 49.144 | 48.010% |
+| Encode64 | full width | 90.627 | 104.281 | 13.227% |
+| Decode64 | full width | 28.596 | 86.777 | 67.081% |
+| Encode32 | leading-zero rotation | 33.993 | 60.487 | 43.214% |
+| Decode32 | leading-zero rotation | 27.845 | 45.383 | 38.279% |
+| Encode64 | leading-zero rotation | 91.439 | 106.730 | 13.929% |
+| Decode64 | leading-zero rotation | 29.370 | 78.169 | 62.418% |
 
-The squeezed radix-`58^5` AVX2 encoder used 2.5% fewer median ticks than
-Turbo, 33.3% fewer than five8, and 24.1% fewer than Firedancer, corresponding
-to 1.03x, 1.50x, and 1.32x their call throughput. An independent 31-trial
-replication measured Braid58 at 54.82 ticks and Turbo at 55.00, a 0.3% Braid58
-lead. The local Braid58 edge is therefore repeatable but small enough that a
-universal ordering would be unwarranted. Before the squeeze, Braid58 measured
-55.53 ticks in this harness; a direct strict-Haswell A/B measured about a 5%
-reduction from the new common path.
+Result: `gate=PASS failures=0`.
 
-The AVX2 decoder remains slower than Turbo and five8, but used 31.9% fewer
-ticks than Firedancer and delivered 1.47x its call throughput. Native AVX-512
-is still materially faster: the recorded AVX-512 encoder used 34.3% fewer
-median ticks than the squeezed AVX2 encoder. The algorithmic advantage
-therefore carries to AVX2 without erasing the additional AVX-512 benefit.
+Comparator build and gate invocation are specified in
+[docs/TURBO_GATE.md](docs/TURBO_GATE.md).
 
-These local absolute numbers are much lower than the EPYC record in
-`DESIGN.md`, but that does not contradict it: invariant-TSC rate, boost state,
-AVX-512 behavior, compiler, and microarchitecture all differ.  The bundled
-correctness claims reproduced.  The original benchmark harness is absent from
-the archive, so its exact EPYC ranges still cannot be regenerated.  This
-same-host run reproduces the claimed ordering against the exact Base58 Turbo
-0.3.0 release while including both runtime dispatch and the complete public
-API.  five8 1.0.0 remains a second Rust baseline in the documented harness.
+## Base58 Turbo Criterion benchmark
 
-Reproduce with:
+This run uses Base58 Turbo's `benches/encoding_bench.rs` and
+`benches/scripts/plot_bench.py` at commit
+`18c8f94eadfa5643dfd7e31b02250d3bf184fa68`. The applied
+[patch](bench/turbo-criterion.patch) adds Braid58 Encode32, Decode32, Encode64,
+and Decode64 entries and the corresponding plot series. It compares Braid58
+output with Turbo before each timed entry. Turbo's original Criterion
+configuration remains 3 seconds of warm-up, 5 seconds of measurement, 50
+samples, and a 5% noise threshold.
+
+The original harness generates a new unseeded value for each size on every
+run. The patch replaces that generator with `Xoshiro256PlusPlus`, seed
+`0x4252414944353800 ^ size`, and forces the most-significant byte nonzero. This
+makes the two backend runs use identical full-width values and avoids measuring
+Turbo's leading-zero special case by accident.
+
+AVX2 and AVX-512 are linked into separate benchmark executables. Base58 Turbo
+uses its `unsafe-simd` AVX2 path under `-C target-cpu=native` and has no AVX-512
+kernel. Each Braid result below is paired with the Turbo result from the same
+executable. Both processes were pinned to logical CPU 31.
+
+> **ISA comparison:** The AVX-512 rows compare Braid58 AVX-512 with Base58
+> Turbo AVX2. The AVX2 rows measure both implementations at the same ISA
+> level.
+
+| Executable | Operation | Braid time | Braid throughput | Turbo time | Turbo throughput |
+|---|---|---:|---:|---:|---:|
+| AVX2 | Encode32 | 22.306 ns | 1.3361 GiB/s | 23.942 ns | 1.2448 GiB/s |
+| AVX2 | Decode32 | 11.087 ns | 3.6961 GiB/s | 17.196 ns | 2.3830 GiB/s |
+| AVX2 | Encode64 | 41.492 ns | 1.4365 GiB/s | 43.813 ns | 1.3604 GiB/s |
+| AVX2 | Decode64 | 28.164 ns | 2.9100 GiB/s | 36.103 ns | 2.2701 GiB/s |
+| AVX-512 | Encode32 | 10.914 ns | 2.7307 GiB/s | 21.621 ns | 1.3784 GiB/s |
+| AVX-512 | Decode32 | 8.2007 ns | 4.9969 GiB/s | 17.507 ns | 2.3406 GiB/s |
+| AVX-512 | Encode64 | 36.217 ns | 1.6458 GiB/s | 41.661 ns | 1.4307 GiB/s |
+| AVX-512 | Decode64 | 11.238 ns | 7.2930 GiB/s | 33.860 ns | 2.4205 GiB/s |
+
+The README charts retain Turbo's original 16/32/48/64/128-byte sweep and
+comparators. Braid58 appears only at 32 and 64 bytes. Encode throughput counts
+binary input bytes; decode throughput counts encoded Base58 bytes.
+
+## Fixed x3 encoding
+
+The native benchmark also compares `braid58_encode_32x3` with Base58 Turbo's
+public `encode_32_batch` using exactly three inputs per call. Both write one
+length per lane; Braid also writes a trailing NUL. The deterministic corpus
+contains full-width 44-character values. Outputs are compared before timing.
+Each row is the median of 15 trials of one million batch calls on CPU 31.
+The harness makes one C ABI call per batch. Turbo's bridge constructs fixed
+slices and calls the public Rust method; it does not change Turbo's algorithm.
+
+Turbo is built with `-C target-cpu=haswell` for these rows. The AVX2 row is
+therefore an equal-ISA comparison and both AVX2 objects are audited to contain
+no AVX-512 instructions.
+
+| Braid target | Braid ticks/batch | Braid ticks/value | Braid GiB/s | Turbo ticks/batch | Turbo ticks/value | Turbo GiB/s | Braid time reduction |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| AVX2 | 117.68 | 39.23 | 1.899 | 140.03 | 46.68 | 1.596 | 16.0% |
+| AVX-512 | 66.98 | 22.33 | 3.337 | 144.94 | 48.31 | 1.542 | 53.8% |
+
+| Braid target | Single ticks/value | x3 ticks/value | x3 reduction |
+|---|---:|---:|---:|
+| AVX2 | 56.95 | 39.23 | 31.1% |
+| AVX-512 | 28.03 | 22.33 | 20.3% |
+
+Encode64 has no Turbo batch API, so the comparator below is three sequential
+Turbo `encode_into` calls. Braid AVX2 uses its dedicated x3 schedule. Braid
+AVX-512 uses three selected single calls because no dedicated AVX-512
+Encode64 batch kernel is included.
+
+| Braid target | Braid ticks/batch | Braid ticks/value | Braid GiB/s | Turbo ticks/batch | Turbo ticks/value | Turbo GiB/s |
+|---|---:|---:|---:|---:|---:|---:|
+| AVX2 | 248.67 | 82.89 | 1.798 | 279.05 | 93.02 | 1.602 |
+| AVX-512 | 263.31 | 87.77 | 1.698 | 289.47 | 96.49 | 1.544 |
+
+The AVX2 Encode64 x3 schedule reduces Braid's own time per value by 20.4%
+relative to its 104.19-tick single row in the same executable.
+
+> **ISA comparison:** The AVX-512 rows compare Braid58 AVX-512 with Turbo AVX2.
+> AVX-512 activity in the shared process may also affect core frequency. The
+> AVX2 rows measure both implementations at the same ISA level.
+
+Run the equal-ISA AVX2 batch benchmark with:
 
 ```sh
-make test
-BENCH_CPU=31 make bench
-BENCH_CPU=31 BENCH_TRIALS=31 BENCH_BRAID_MAX_ISA=avx2 make bench
+BENCH_BRAID_TARGET=avx2 \
+BENCH_TURBO_TARGET_CPU=haswell \
+BENCH_AVX2_TUNE=haswell \
+BENCH_CPU=31 BENCH_ITERATIONS=1000000 BENCH_TRIALS=15 \
+  ./bench/run.sh
 ```
+
+For the cross-ISA row, change `BENCH_BRAID_TARGET` to `avx512` and leave
+Turbo at `haswell`.
+
+Base58 Turbo Criterion reproduction:
+
+```sh
+BRAID58_DIR=$PWD
+
+cmake -S "$BRAID58_DIR" -B /tmp/braid58-criterion-avx2 \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBRAID58_TARGET=avx2 \
+  -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=znver5"
+cmake --build /tmp/braid58-criterion-avx2 --parallel
+
+cmake -S "$BRAID58_DIR" -B /tmp/braid58-criterion-avx512 \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DBRAID58_TARGET=avx512 \
+  -DCMAKE_C_FLAGS_RELEASE="-O3 -DNDEBUG -march=znver5"
+cmake --build /tmp/braid58-criterion-avx512 --parallel
+
+git clone https://github.com/hacer-bark/base58-turbo.git /tmp/base58-turbo
+git -C /tmp/base58-turbo checkout 18c8f94eadfa5643dfd7e31b02250d3bf184fa68
+git -C /tmp/base58-turbo apply "$BRAID58_DIR/bench/turbo-criterion.patch"
+
+mkdir -p /tmp/base58-turbo/native
+cp /tmp/braid58-criterion-avx2/libbraid58.a \
+  /tmp/base58-turbo/native/libbraid58.a
+
+cd /tmp/base58-turbo
+taskset -c 31 env \
+  CARGO_TARGET_DIR=/tmp/base58-turbo-target-avx2 \
+  BRAID58_BENCH_BACKEND=AVX2 \
+  RUSTFLAGS="-C target-cpu=native -L native=/tmp/base58-turbo/native" \
+  BENCH_TARGET=all cargo bench --bench encoding_bench \
+  2>&1 | tee /tmp/braid58-turbo-criterion-avx2.txt
+
+python3 /tmp/base58-turbo/benches/scripts/plot_bench.py \
+  /tmp/braid58-turbo-criterion-avx2.txt --braid-backend avx2 \
+  --out "$BRAID58_DIR/bench/results/turbo-criterion-avx2-9995wx.png"
+
+cp /tmp/braid58-criterion-avx512/libbraid58.a \
+  /tmp/base58-turbo/native/libbraid58.a
+
+taskset -c 31 env \
+  CARGO_TARGET_DIR=/tmp/base58-turbo-target-avx512 \
+  BRAID58_BENCH_BACKEND=AVX512 \
+  RUSTFLAGS="-C target-cpu=native -L native=/tmp/base58-turbo/native" \
+  BENCH_TARGET=all cargo bench --bench encoding_bench \
+  2>&1 | tee /tmp/braid58-turbo-criterion-avx512.txt
+
+python3 /tmp/base58-turbo/benches/scripts/plot_bench.py \
+  /tmp/braid58-turbo-criterion-avx512.txt --braid-backend avx512 \
+  --out "$BRAID58_DIR/bench/results/turbo-criterion-avx512-9995wx.png"
+```
+
+## Braid58 throughput
+
+Fifteen trials, one million calls per trial:
+
+| Target | Operation | Median ticks | Mcalls/s | GiB/s |
+|---|---|---:|---:|---:|
+| AVX-512 | Encode32 | 26.49 | 94.38 | 2.813 |
+| AVX-512 | Decode32 | 20.17 | 123.94 | 5.079 |
+| AVX-512 | Encode64 | 83.54 | 29.93 | 1.784 |
+| AVX-512 | Decode64 | 27.48 | 90.99 | 7.457 |
+| AVX2 | Encode32 | 54.91 | 45.52 | 1.357 |
+| AVX2 | Decode32 | 29.05 | 86.04 | 3.526 |
+| AVX2 | Encode64 | 103.07 | 24.26 | 1.446 |
+| AVX2 | Decode64 | 67.89 | 36.82 | 3.018 |
+
+AVX2 versus Turbo median ticks in the same run:
+
+| Operation | Braid | Turbo | Difference |
+|---|---:|---:|---:|
+| Encode32 | 54.91 | 55.38 | -0.85% |
+| Decode32 | 29.05 | 47.53 | -38.88% |
+| Encode64 | 103.07 | 103.24 | -0.16% |
+| Decode64 | 67.89 | 81.38 | -16.58% |
+
+Encode differences below 1% are within observed run-to-run variance.
+
+## Commands
+
+```sh
+make test-optimized TEST_TARGET=native
+make audit
+BENCH_CPU=31 BENCH_TRIALS=15 make bench
+```
+
+`bench/run.sh` prints the resolved Braid target and Turbo target CPU. Set both
+`BENCH_TURBO_TARGET_CPU=haswell` and `BENCH_AVX2_TUNE=haswell` for the strict
+equal-ISA batch comparison above.
+
+`make bench` compares Braid58 with Base58 Turbo 0.3.0, five8 1.0.0, and
+Firedancer commit `e14b9929232019aa61f9258406a4c926e5fee75a` after validating
+the shared 32-byte and 64-byte inputs.
